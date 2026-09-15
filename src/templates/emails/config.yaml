@@ -5,7 +5,7 @@ branding:
   name: "Khabaroff Studio: Obsidian Webhooks"
   tagline: "Webhook delivery to Obsidian"
   website: "https://obsidian-webhooks.khabaroff.studio"
-  dashboard_url: "https://obsidian-webhooks.khabaroff.studio/login"
+  dashboard_url: "https://obsidian-webhooks.khabaroff.studio/dashboard"
   docs_url: "https://obsidian-webhooks.khabaroff.studio/guides/"
 
 design:

@@ -5,7 +5,7 @@
 - Docker and Docker Compose
 - PostgreSQL 15+ database (or Supabase account)
 - Domain with SSL certificate (for production)
-- Mailgun account (for email authentication)
+- Access to an SMTP server (for email authentication)
 
 ## 1. Database Setup
 
@@ -36,11 +36,14 @@ PORT=8081
 EXTERNAL_HOST=https://your-domain.com
 DATABASE_URL=postgres://user:password@host:5432/database
 
-# Authentication (Mailgun - required for user registration)
-MAILGUN_DOMAIN=mail.your-domain.com
-MAILGUN_API_KEY=your-mailgun-api-key
-MAILGUN_FROM_EMAIL=noreply@your-domain.com
-MAILGUN_FROM_NAME=Khabaroff Studio: Obsidian Webhooks
+# Authentication (SMTP - required for user registration)
+SMTP_HOST=smtp.your-provider.com
+SMTP_PORT=587
+SMTP_USERNAME=your-smtp-user
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM_EMAIL=noreply@your-domain.com
+SMTP_FROM_NAME=Khabaroff Studio: Obsidian Webhooks
+SMTP_TLS_MODE=starttls
 MAGIC_LINK_BASE_URL=https://your-domain.com
 ```
 
@@ -58,8 +61,16 @@ ENCRYPTION_KEY=your-64-char-hex-string
 EVENT_TTL_DAYS=30
 ENABLE_AUTO_CLEANUP=true
 
+# Authentication request rate limit per client IP
+AUTH_RATE_LIMIT_PER_MINUTE=3
+AUTH_RATE_LIMIT_BURST=3
+
 # Magic link expiry (default: 3600 seconds = 1 hour)
 MAGIC_LINK_EXPIRY=3600
+
+# Optional override. By default cookies are Secure for HTTPS URLs and
+# localhost-compatible for HTTP URLs.
+# COOKIE_SECURE=true
 
 # Marketing automation (optional - server works without it)
 MAILERLITE_API_KEY=your-mailerlite-key
@@ -85,7 +96,7 @@ The server starts and works fully without these services:
 | MailerLite | Server works normally | No marketing emails |
 | PostHog | Server works normally | No analytics tracking |
 | Encryption key | Server works normally | Event data stored in plaintext |
-| Mailgun | Server starts, but auth disabled | Users can't register/login |
+| SMTP | Server starts, but auth disabled | Users can't register/login |
 
 ## 3. Deploy with Docker
 
@@ -258,8 +269,8 @@ make css           # rebuild src/templates/assets/tailwind.css
 - Ensure PostgreSQL allows connections (check firewall, IPv6 if using Supabase)
 
 ### Users can't register
-- Verify `MAILGUN_API_KEY` and `MAILGUN_DOMAIN` are set
-- Check Mailgun dashboard for delivery status
+- Verify `SMTP_HOST`, `SMTP_FROM_EMAIL`, and any required SMTP credentials are set
+- Check your SMTP provider's delivery logs
 - Verify `MAGIC_LINK_BASE_URL` matches your actual domain
 
 ### SSE not working through proxy

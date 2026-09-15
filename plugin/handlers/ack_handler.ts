@@ -13,6 +13,7 @@
  */
 
 import { requestUrl } from "obsidian";
+import { getTunnelRequestHeaders } from "../utils/request-headers";
 
 /**
  * Configuration options for ACKHandler
@@ -134,6 +135,7 @@ export class ACKHandler {
 			url,
 			method: "POST",
 			headers: {
+				...getTunnelRequestHeaders(this.serverUrl),
 				"Content-Type": "application/json",
 			},
 			throw: false,

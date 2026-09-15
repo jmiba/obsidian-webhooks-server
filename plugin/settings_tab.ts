@@ -9,10 +9,14 @@
 
 import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type ObsidianWebhooksPlugin from "./main";
+import type { WebhookSettings } from "./types";
+import { getTunnelRequestHeaders } from "./utils/request-headers";
 
 export class WebhookSettingTab extends PluginSettingTab {
 	plugin: ObsidianWebhooksPlugin;
 	private advancedExpanded = false;
+	private statusBannerEl: HTMLElement | null = null;
+	private statusTextEl: HTMLElement | null = null;
 
 	constructor(app: App, plugin: ObsidianWebhooksPlugin) {
 		super(app, plugin);
@@ -37,27 +41,33 @@ export class WebhookSettingTab extends PluginSettingTab {
 	}
 
 	private renderStatusIndicator(containerEl: HTMLElement): void {
-		const status = this.plugin.connectionStatus;
+		this.statusBannerEl = containerEl.createDiv({
+			cls: "webhook-status-banner",
+		});
+		this.statusTextEl = this.statusBannerEl.createEl("span", {
+			cls: "webhook-status-text",
+		});
+		this.updateConnectionStatus();
+	}
 
+	updateConnectionStatus(): void {
+		if (!this.statusBannerEl || !this.statusTextEl) {
+			return;
+		}
+
+		const status = this.plugin.connectionStatus;
 		let className = "webhook-status-error";
 		let message = status.message;
 
 		if (status.state === "connected") {
 			className = "webhook-status-connected";
 			message = "Connected";
-		} else if (status.state === "connecting") {
-			className = "webhook-status-warning";
-		} else if (status.message.includes("Reconnecting")) {
+		} else if (status.state === "connecting" || status.message.includes("Reconnecting")) {
 			className = "webhook-status-warning";
 		}
 
-		const statusDiv = containerEl.createDiv({
-			cls: `webhook-status-banner ${className}`,
-		});
-		statusDiv.createEl("span", {
-			text: message,
-			cls: "webhook-status-text",
-		});
+		this.statusBannerEl.className = `webhook-status-banner ${className}`;
+		this.statusTextEl.textContent = message;
 	}
 
 	private renderClientKey(containerEl: HTMLElement): void {
@@ -114,6 +124,7 @@ export class WebhookSettingTab extends PluginSettingTab {
 			const response = await requestUrl({
 				url: `${this.plugin.settings.serverUrl}/test/${clientKey}`,
 				method: "POST",
+				headers: getTunnelRequestHeaders(this.plugin.settings.serverUrl),
 				throw: false,
 			});
 
@@ -129,6 +140,9 @@ export class WebhookSettingTab extends PluginSettingTab {
 			const latency = Date.now() - startTime;
 			resultDiv.textContent = `Test passed! Server responded in ${latency}ms`;
 			resultDiv.classList.add("test-success");
+
+			// Rebuild handlers with the current settings and establish the live connection.
+			await this.plugin.reconnectWithCurrentSettings();
 
 			// Auto-hide result after 10 seconds
 			setTimeout(() => {
@@ -203,9 +217,11 @@ export class WebhookSettingTab extends PluginSettingTab {
 				dropdown
 					.addOption("append", "Append to end")
 					.addOption("overwrite", "Overwrite file")
+					.addOption("frontmatter", "Update YAML frontmatter")
 					.setValue(this.plugin.settings.defaultMode)
 					.onChange(async (value) => {
-						this.plugin.settings.defaultMode = value as "append" | "overwrite";
+						this.plugin.settings.defaultMode =
+							value as WebhookSettings["defaultMode"];
 						await this.plugin.saveSettings();
 					})
 			);

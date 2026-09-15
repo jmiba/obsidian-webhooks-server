@@ -2,12 +2,18 @@
  * file_handler.ts - File operations handler for webhook events
  *
  * Handles creating/updating files in the Obsidian vault based on webhook events.
- * Supports append/overwrite modes, directory auto-creation, and custom separators.
+ * Supports append, overwrite, and frontmatter modes, directory auto-creation,
+ * and custom separators.
  */
 
 import type { WebhookEvent, FileOperationOptions } from "../types";
 import type { Vault } from "obsidian";
-import { TAbstractFile, TFile, normalizePath } from "obsidian";
+import {
+	TFile,
+	normalizePath,
+	parseYaml,
+	stringifyYaml,
+} from "obsidian";
 import { formatData } from "../utils/json-formatter";
 
 /**
@@ -48,14 +54,24 @@ export class FileHandler {
 		// Merge options with defaults
 		const opts = { ...DEFAULT_OPTIONS, ...options };
 
-		// Prepare content with optional separator
-		const content = this.prepareContent(event.data!, opts);
-
 		// Ensure parent directory exists
 		await this.ensureDirectoryExists(path);
 
 		// Use adapter.exists() for reliable file existence check (doesn't rely on cache)
 		const fileExists = await this.vault.adapter.exists(path);
+
+		if (opts.mode === "frontmatter") {
+			const fields = this.parseFrontmatterPayload(event.data!);
+			if (fileExists) {
+				await this.updateFrontmatter(path, fields);
+			} else {
+				await this.createFrontmatterFile(path, fields);
+			}
+			return;
+		}
+
+		// Prepare content with optional separator
+		const content = this.prepareContent(event.data!, opts);
 
 		if (fileExists) {
 			// File exists - get it and update
@@ -73,6 +89,127 @@ export class FileHandler {
 		} else {
 			// File doesn't exist - create it
 			await this.createNewFile(path, content);
+		}
+	}
+
+	/**
+	 * Parse either a complete `---` delimited frontmatter block or a YAML/JSON
+	 * mapping containing only the fields to merge.
+	 */
+	private parseFrontmatterPayload(data: string): Record<string, unknown> {
+		const trimmed = data.trim();
+		let yaml = trimmed;
+
+		if (trimmed.startsWith("---")) {
+			const block = trimmed.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*$/);
+			if (!block) {
+				throw new Error(
+					"Frontmatter payload must contain only one complete YAML frontmatter block"
+				);
+			}
+			yaml = block[1];
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = parseYaml(yaml);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`Invalid frontmatter YAML: ${message}`);
+		}
+
+		if (!this.isFieldMapping(parsed) || Object.keys(parsed).length === 0) {
+			throw new Error(
+				"Frontmatter payload must be a non-empty YAML or JSON field mapping"
+			);
+		}
+
+		for (const key of Object.keys(parsed)) {
+			if (key === "__proto__" || key === "prototype" || key === "constructor") {
+				throw new Error(`Unsafe frontmatter field name: ${key}`);
+			}
+		}
+
+		return parsed;
+	}
+
+	private isFieldMapping(value: unknown): value is Record<string, unknown> {
+		return typeof value === "object" && value !== null && !Array.isArray(value);
+	}
+
+	/** Merge supplied fields while preserving the note body byte-for-byte. */
+	private mergeFrontmatter(
+		existingContent: string,
+		fields: Record<string, unknown>
+	): string {
+		const frontmatter = existingContent.match(
+			/^(\uFEFF?)---[ \t]*(\r?\n)([\s\S]*?)(\r?\n)---[ \t]*(?=\r?\n|$)/
+		);
+
+		let current: Record<string, unknown> = {};
+		let newline = "\n";
+		let prefix = "";
+		let remainder = existingContent;
+
+		if (frontmatter) {
+			const parsed: unknown = parseYaml(frontmatter[3]);
+			if (parsed !== null && parsed !== undefined && !this.isFieldMapping(parsed)) {
+				throw new Error("Existing YAML frontmatter must be a field mapping");
+			}
+			current = parsed ?? {};
+			prefix = frontmatter[1];
+			newline = frontmatter[2];
+			remainder = existingContent.slice(frontmatter[0].length);
+		} else if (existingContent.startsWith("\uFEFF")) {
+			prefix = "\uFEFF";
+			remainder = existingContent.slice(1);
+		}
+
+		for (const [key, value] of Object.entries(fields)) {
+			current[key] = value;
+		}
+
+		const yaml = stringifyYaml(current).trimEnd().replace(/\r?\n/g, newline);
+		const block = `${prefix}---${newline}${yaml}${newline}---`;
+
+		// An existing block already owns the exact bytes following its closing
+		// delimiter. A new block needs one newline before the untouched body.
+		return frontmatter ? block + remainder : block + newline + remainder;
+	}
+
+	private async updateFrontmatter(
+		path: string,
+		fields: Record<string, unknown>
+	): Promise<void> {
+		const file = this.vault.getAbstractFileByPath(path);
+		if (file instanceof TFile) {
+			const existingContent = await this.vault.read(file);
+			await this.vault.modify(file, this.mergeFrontmatter(existingContent, fields));
+			return;
+		}
+
+		// The adapter fallback handles files that exist on disk but have not yet
+		// appeared in Obsidian's metadata cache.
+		const existingContent = await this.vault.adapter.read(path);
+		await this.vault.adapter.write(
+			path,
+			this.mergeFrontmatter(existingContent, fields)
+		);
+	}
+
+	private async createFrontmatterFile(
+		path: string,
+		fields: Record<string, unknown>
+	): Promise<void> {
+		const content = this.mergeFrontmatter("", fields);
+		try {
+			await this.vault.create(path, content);
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("already exists")) {
+				await this.updateFrontmatter(path, fields);
+				return;
+			}
+			throw error;
 		}
 	}
 
@@ -144,13 +281,6 @@ export class FileHandler {
 			return ""; // File is in root
 		}
 		return filePath.substring(0, lastSlash);
-	}
-
-	/**
-	 * Check if abstract file is a file (has extension property)
-	 */
-	private isFile(file: TAbstractFile): file is TFile {
-		return file instanceof TFile;
 	}
 
 	/**

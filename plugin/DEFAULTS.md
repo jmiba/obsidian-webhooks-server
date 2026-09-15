@@ -282,6 +282,9 @@ A: No. Notifications provide important feedback when webhooks are processed. The
 **Q: Can I change write mode to "overwrite"?**
 A: Yes. Expand "Advanced Settings" and select "Overwrite file" from the Write mode dropdown. By default, the plugin uses "Append to end" mode, which is the most common use case for webhook logs.
 
+**Q: Can I update only YAML frontmatter?**
+A: Yes. Select "Update YAML frontmatter" from the Write mode dropdown. Send a complete frontmatter block, a YAML field mapping, or a JSON object. Matching fields are overwritten, missing fields are created, and the note body is preserved.
+
 **Q: Why can't I disable auto-create folders?**
 A: Disabling it would cause "parent folder not found" errors. There's no benefit to manual folder creation - it's always safe to enable.
 

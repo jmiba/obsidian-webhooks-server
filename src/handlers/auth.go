@@ -16,6 +16,7 @@ type AuthHandler struct {
 	emailService      *services.EmailService
 	mailerliteService *services.MailerLiteService
 	analyticsService  *services.AnalyticsService
+	cookieSecure      bool
 }
 
 // NewAuthHandler creates a new authentication handler
@@ -24,12 +25,14 @@ func NewAuthHandler(
 	emailService *services.EmailService,
 	mailerliteService *services.MailerLiteService,
 	analyticsService *services.AnalyticsService,
+	cookieSecure bool,
 ) *AuthHandler {
 	return &AuthHandler{
 		authService:       authService,
 		emailService:      emailService,
 		mailerliteService: mailerliteService,
 		analyticsService:  analyticsService,
+		cookieSecure:      cookieSecure,
 	}
 }
 
@@ -137,11 +140,11 @@ func (h *AuthHandler) HandleRegister(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":      "Registration successful! Please check your email for a magic link to sign in.",
-		"email":        req.Email,
-		"webhook_key":  webhookKey,
-		"client_key":   clientKey,
-		"expires_in":   "60 minutes",
+		"message":     "Registration successful! Please check your email for a magic link to sign in.",
+		"email":       req.Email,
+		"webhook_key": webhookKey,
+		"client_key":  clientKey,
+		"expires_in":  "60 minutes",
 	})
 }
 
@@ -276,14 +279,12 @@ func (h *AuthHandler) HandleVerifyMagicLink(c *gin.Context) {
 	}
 
 	// Set HTTP-only cookie
-	c.SetCookie(
+	setAuthCookie(
+		c,
 		"session_token",
 		sessionToken,
 		30*24*3600, // 30 days
-		"/",
-		"",
-		true,  // Secure (HTTPS only)
-		true,  // HttpOnly
+		h.cookieSecure,
 	)
 
 	// Track account_activated

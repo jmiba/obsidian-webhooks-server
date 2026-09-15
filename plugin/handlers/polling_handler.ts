@@ -7,6 +7,7 @@
 
 import { requestUrl } from "obsidian";
 import type { WebhookEvent } from "../types";
+import { getTunnelRequestHeaders } from "../utils/request-headers";
 
 /**
  * Callback type for handling received events
@@ -47,7 +48,12 @@ export class PollingHandler {
 	async pollOnce(): Promise<void> {
 		try {
 			const url = `${this.serverUrl}/events/${this.clientKey}?poll=true`;
-			const response = await requestUrl({ url, method: "GET", throw: false });
+			const response = await requestUrl({
+				url,
+				method: "GET",
+				headers: getTunnelRequestHeaders(this.serverUrl),
+				throw: false,
+			});
 
 			if (response.status < 200 || response.status >= 300) {
 				console.error(`Polling failed: ${response.status}`);

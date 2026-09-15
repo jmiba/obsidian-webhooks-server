@@ -40,8 +40,8 @@ export interface WebhookSettings {
 	/** Whether to automatically connect to SSE on plugin load */
 	autoConnect: boolean;
 
-	/** Default write mode: append to end of file or overwrite */
-	defaultMode: "append" | "overwrite";
+	/** Default write mode: append, overwrite, or merge YAML frontmatter */
+	defaultMode: "append" | "overwrite" | "frontmatter";
 
 	/** Type of newline to add between incoming notes (none, windows, unix) */
 	newlineType: "none" | "windows" | "unix";
@@ -135,7 +135,7 @@ export interface PollingOptions {
  */
 export interface FileOperationOptions {
 	/** Write mode for the file */
-	mode: "append" | "overwrite";
+	mode: "append" | "overwrite" | "frontmatter";
 
 	/** Whether to create parent directories if they don't exist */
 	createDirs: boolean;
@@ -143,4 +143,3 @@ export interface FileOperationOptions {
 	/** Optional custom content separator for append mode */
 	separator?: string;
 }
-

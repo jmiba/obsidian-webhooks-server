@@ -87,16 +87,20 @@ func main() {
 	var mailerliteService *services.MailerLiteService
 	var authService *services.AuthService
 
-	if cfg.MailgunAPIKey != "" && cfg.MailgunDomain != "" {
-		emailService = services.NewEmailService(
-			cfg.MailgunDomain,
-			cfg.MailgunAPIKey,
-			cfg.MailgunFromEmail,
-			cfg.MailgunFromName,
-		)
-		log.Info().Str("domain", cfg.MailgunDomain).Msg("Mailgun email service initialized")
+	if cfg.SMTPHost != "" && cfg.SMTPFromEmail != "" {
+		emailService = services.NewEmailService(services.SMTPConfig{
+			Host:      cfg.SMTPHost,
+			Port:      cfg.SMTPPort,
+			Username:  cfg.SMTPUsername,
+			Password:  cfg.SMTPPassword,
+			FromEmail: cfg.SMTPFromEmail,
+			FromName:  cfg.SMTPFromName,
+			BaseURL:   cfg.MagicLinkBaseURL,
+			TLSMode:   cfg.SMTPTLSMode,
+		})
+		log.Info().Str("host", cfg.SMTPHost).Int("port", cfg.SMTPPort).Msg("SMTP email service initialized")
 	} else {
-		log.Warn().Msg("Mailgun credentials not configured - email authentication disabled")
+		log.Warn().Msg("SMTP host or sender not configured - email authentication disabled")
 	}
 
 	if cfg.MailerLiteAPIKey != "" {
@@ -164,7 +168,7 @@ func main() {
 			return false
 		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "ngrok-skip-browser-warning"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -222,13 +226,13 @@ func setupRoutes(router *gin.Engine, db *database.Database, keyService *services
 	// Wire up SSE broadcaster for real-time event delivery
 	webhookHandler.SetBroadcaster(sseHandler)
 	dashboardHandler := handlers.NewDashboardHandler(keyService, eventService)
-	adminHandler := handlers.NewAdminHandler(keyService, adminService, eventService)
+	adminHandler := handlers.NewAdminHandler(keyService, adminService, eventService, cfg.CookieSecure)
 	// Email authentication handlers (only if services are configured)
 	var authHandler *handlers.AuthHandler
 	var dashboardHandlerNew *handlers.DashboardHandler
 	if emailService != nil && authService != nil {
-		authHandler = handlers.NewAuthHandler(authService, emailService, mailerliteService, analyticsService)
-		dashboardHandlerNew = handlers.NewDashboardHandlerWithAuth(db.GetPool(), authService, keyService)
+		authHandler = handlers.NewAuthHandler(authService, emailService, mailerliteService, analyticsService, cfg.CookieSecure)
+		dashboardHandlerNew = handlers.NewDashboardHandlerWithAuth(db.GetPool(), authService, keyService, cfg.CookieSecure)
 		log.Info().Msg("Email authentication handlers initialized")
 	}
 
@@ -352,7 +356,10 @@ func setupRoutes(router *gin.Engine, db *database.Database, keyService *services
 	if authHandler != nil && dashboardHandlerNew != nil {
 		// Auth endpoints with rate limiting (3 requests per minute per IP)
 		authGroup := router.Group("/auth")
-		authGroup.Use(middleware.AuthRateLimitMiddleware())
+		authGroup.Use(middleware.AuthRateLimitMiddleware(middleware.RateLimitConfig{
+			RequestsPerMinute: cfg.AuthRateLimitPerMinute,
+			Burst:             cfg.AuthRateLimitBurst,
+		}))
 		{
 			authGroup.POST("/register", authHandler.HandleRegister)
 			authGroup.POST("/request-login", authHandler.HandleRequestLogin)

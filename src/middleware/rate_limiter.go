@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -144,7 +146,7 @@ func NewIPRateLimitingMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 		cfg.RequestsPerMinute = 3
 	}
 	if cfg.Burst <= 0 {
-		cfg.Burst = 1
+		cfg.Burst = 3
 	}
 
 	limit := rate.Every(time.Minute / time.Duration(cfg.RequestsPerMinute))
@@ -155,10 +157,12 @@ func NewIPRateLimitingMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 
 		l := limiter.getLimiter(ip)
 		if !l.Allow() {
+			retryAfterSeconds := int(math.Ceil((time.Minute / time.Duration(cfg.RequestsPerMinute)).Seconds()))
+			c.Header("Retry-After", strconv.Itoa(retryAfterSeconds))
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"error":       "rate_limit_exceeded",
 				"message":     "Too many requests. Please try again later.",
-				"retry_after": "60s",
+				"retry_after": strconv.Itoa(retryAfterSeconds) + "s",
 			})
 			c.Abort()
 			return
@@ -170,9 +174,6 @@ func NewIPRateLimitingMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
 
 // AuthRateLimitMiddleware is a pre-configured middleware for authentication endpoints
 // Allows 3 requests per minute per IP address
-func AuthRateLimitMiddleware() gin.HandlerFunc {
-	return NewIPRateLimitingMiddleware(RateLimitConfig{
-		RequestsPerMinute: 3,
-		Burst:             1,
-	})
+func AuthRateLimitMiddleware(cfg RateLimitConfig) gin.HandlerFunc {
+	return NewIPRateLimitingMiddleware(cfg)
 }

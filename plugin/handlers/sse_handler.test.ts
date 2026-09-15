@@ -12,7 +12,7 @@
  * - Connection state callbacks
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import type { WebhookEvent } from "../types";
 
 /**
@@ -99,6 +99,7 @@ describe("SSEHandler", () => {
 	let handler: SSEHandler;
 	let receivedEvents: WebhookEvent[] = [];
 	let stateChanges: Array<{ state: string; message: string }> = [];
+	const originalFetch = global.fetch;
 
 	const serverUrl = "https://webhook.example.com";
 	const clientKey = "cl_test123456";
@@ -125,6 +126,7 @@ describe("SSEHandler", () => {
 	afterEach(async () => {
 		// Clean up connections
 		await handler.disconnect();
+		global.fetch = originalFetch;
 	});
 
 	/**
@@ -360,5 +362,56 @@ describe("SSEHandler", () => {
 		// Should not create a new instance (should use existing or replace)
 		const secondInstanceCount = MockEventSource.getInstances().length;
 		expect(secondInstanceCount).toBeLessThanOrEqual(firstInstanceCount + 1);
+	});
+
+	test("should use a header-capable SSE stream for ngrok", async () => {
+		const ngrokUrl = "https://example.ngrok-free.dev";
+		const encoder = new TextEncoder();
+		const testEvent: WebhookEvent = {
+			id: "event-ngrok",
+			path: "inbox/ngrok.md",
+			data: "Tunnel content",
+			created_at: "2025-11-23T10:00:00Z",
+		};
+
+		global.fetch = mock(async (_url: string, options: RequestInit) => {
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(encoder.encode(": connected\n\n"));
+					controller.enqueue(
+						encoder.encode(`data: ${JSON.stringify(testEvent)}\n\n`)
+					);
+					options.signal?.addEventListener("abort", () => controller.close());
+				},
+			});
+			return new Response(stream, {
+				status: 200,
+				headers: { "Content-Type": "text/event-stream" },
+			});
+		}) as typeof fetch;
+
+		handler = new SSEHandler(
+			ngrokUrl,
+			clientKey,
+			async (event: WebhookEvent) => {
+				receivedEvents.push(event);
+			},
+			(state: string, message: string) => {
+				stateChanges.push({ state, message });
+			}
+		);
+
+		handler.connect();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(global.fetch).toHaveBeenCalledTimes(1);
+		const [url, options] = (global.fetch as ReturnType<typeof mock>).mock.calls[0];
+		expect(url).toBe(`${ngrokUrl}/events/${clientKey}`);
+		expect(options.headers).toEqual({
+			Accept: "text/event-stream",
+			"ngrok-skip-browser-warning": "1",
+		});
+		expect(handler.isConnected()).toBe(true);
+		expect(receivedEvents).toEqual([testEvent]);
 	});
 });

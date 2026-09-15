@@ -16,14 +16,16 @@ type AdminHandler struct {
 	keyService   *services.KeyService
 	adminService *services.AdminService
 	eventService *services.EventService
+	cookieSecure bool
 }
 
 // NewAdminHandler creates a new admin handler
-func NewAdminHandler(keyService *services.KeyService, adminService *services.AdminService, eventService *services.EventService) *AdminHandler {
+func NewAdminHandler(keyService *services.KeyService, adminService *services.AdminService, eventService *services.EventService, cookieSecure bool) *AdminHandler {
 	return &AdminHandler{
 		keyService:   keyService,
 		adminService: adminService,
 		eventService: eventService,
+		cookieSecure: cookieSecure,
 	}
 }
 
@@ -152,14 +154,12 @@ func (ah *AdminHandler) HandleAdminLogin(c *gin.Context) {
 
 	// Set cookie
 	expiresAt := time.Now().Add(24 * time.Hour)
-	c.SetCookie(
+	setAuthCookie(
+		c,
 		"admin_token",
 		token,
 		int(24*time.Hour.Seconds()),
-		"/",
-		"",
-		true, // Secure
-		true, // HttpOnly
+		ah.cookieSecure,
 	)
 
 	c.JSON(http.StatusOK, AdminLoginResponse{
@@ -170,14 +170,12 @@ func (ah *AdminHandler) HandleAdminLogin(c *gin.Context) {
 
 // HandleAdminLogout clears the admin token cookie
 func (ah *AdminHandler) HandleAdminLogout(c *gin.Context) {
-	c.SetCookie(
+	setAuthCookie(
+		c,
 		"admin_token",
 		"",
 		-1,
-		"/",
-		"",
-		true, // Secure
-		true, // HttpOnly
+		ah.cookieSecure,
 	)
 
 	c.JSON(http.StatusOK, gin.H{

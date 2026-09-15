@@ -2,8 +2,10 @@ package config
 
 import (
 	cryptoRand "crypto/rand"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +22,8 @@ type Config struct {
 	AllowedOrigins                     string
 	LogLevel                           string
 	LogFormat                          string
+	AuthRateLimitPerMinute             int
+	AuthRateLimitBurst                 int
 
 	// PostHog Analytics settings
 	PostHogAPIKey  string
@@ -27,15 +31,19 @@ type Config struct {
 	PostHogEnabled bool
 
 	// Email Authentication settings
-	MailgunDomain         string
-	MailgunAPIKey         string
-	MailgunFromEmail      string
-	MailgunFromName       string
-	MailerLiteAPIKey      string
+	SMTPHost               string
+	SMTPPort               int
+	SMTPUsername           string
+	SMTPPassword           string
+	SMTPFromEmail          string
+	SMTPFromName           string
+	SMTPTLSMode            string
+	MailerLiteAPIKey       string
 	MailerLiteGroupSignups string
 	MailerLiteGroupActive  string
-	MagicLinkExpiry        int    // seconds
+	MagicLinkExpiry        int // seconds
 	MagicLinkBaseURL       string
+	CookieSecure           bool
 
 	// Encryption at rest
 	EncryptionKey string // 64 hex chars = 32 bytes AES-256 key; empty = disabled
@@ -59,6 +67,8 @@ func Load() *Config {
 		AllowedOrigins:                     getEnv("ALLOWED_ORIGINS", ""),
 		LogLevel:                           getEnv("LOG_LEVEL", "info"),
 		LogFormat:                          getEnv("LOG_FORMAT", "json"),
+		AuthRateLimitPerMinute:             getEnvInt("AUTH_RATE_LIMIT_PER_MINUTE", 3),
+		AuthRateLimitBurst:                 getEnvInt("AUTH_RATE_LIMIT_BURST", 3),
 
 		// PostHog Analytics
 		PostHogAPIKey:  getEnv("POSTHOG_API_KEY", ""),
@@ -66,10 +76,13 @@ func Load() *Config {
 		PostHogEnabled: getEnvBool("POSTHOG_ENABLED", false),
 
 		// Email Authentication
-		MailgunDomain:          getEnv("MAILGUN_DOMAIN", ""),
-		MailgunAPIKey:          getEnv("MAILGUN_API_KEY", ""),
-		MailgunFromEmail:       getEnv("MAILGUN_FROM_EMAIL", "noreply@obsidian-webhooks.khabaroff.studio"),
-		MailgunFromName:        getEnv("MAILGUN_FROM_NAME", "Khabaroff Studio: Obsidian Webhooks"),
+		SMTPHost:               getEnv("SMTP_HOST", ""),
+		SMTPPort:               getEnvInt("SMTP_PORT", 587),
+		SMTPUsername:           getEnvWithFallback("SMTP_USERNAME", "SMTP_USER", ""),
+		SMTPPassword:           getEnv("SMTP_PASSWORD", ""),
+		SMTPFromEmail:          getEnvWithFallback("SMTP_FROM_EMAIL", "FROM_EMAIL", "noreply@obsidian-webhooks.khabaroff.studio"),
+		SMTPFromName:           getEnvWithFallback("SMTP_FROM_NAME", "FROM_NAME", "Khabaroff Studio: Obsidian Webhooks"),
+		SMTPTLSMode:            getEnv("SMTP_TLS_MODE", "starttls"),
 		MailerLiteAPIKey:       getEnv("MAILERLITE_API_KEY", ""),
 		MailerLiteGroupSignups: getEnv("MAILERLITE_GROUP_SIGNUPS", ""),
 		MailerLiteGroupActive:  getEnv("MAILERLITE_GROUP_ACTIVE", ""),
@@ -83,6 +96,7 @@ func Load() *Config {
 		AdminUsername: getEnv("ADMIN_USERNAME", ""),
 		AdminPassword: getEnv("ADMIN_PASSWORD", ""),
 	}
+	cfg.CookieSecure = getEnvBool("COOKIE_SECURE", isHTTPSURL(cfg.MagicLinkBaseURL))
 
 	// Generate JWT secret if not provided
 	if cfg.JWTSecret == "" {
@@ -92,11 +106,23 @@ func Load() *Config {
 	return cfg
 }
 
+func isHTTPSURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	return err == nil && strings.EqualFold(parsed.Scheme, "https")
+}
+
 func getEnv(key, defaultValue string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvWithFallback(key, fallbackKey, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return getEnv(fallbackKey, defaultValue)
 }
 
 func getEnvInt(key string, defaultValue int) int {
@@ -127,4 +153,3 @@ func generateRandomSecret(length int) string {
 	}
 	return string(result)
 }
-

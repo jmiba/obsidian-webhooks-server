@@ -8,7 +8,7 @@
  * Features:
  * - Exactly-once delivery via ACK system
  * - Event deduplication using Set
- * - File creation/update in append or overwrite mode
+ * - File creation/update in append, overwrite, or frontmatter mode
  * - Automatic directory creation
  * - Connection status monitoring
  */
@@ -53,6 +53,7 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 	processedEvents: Set<string> = new Set();
 	connectionStatus: ConnectionStatus;
 	statusBarItem: HTMLElement | null = null;
+	private settingTab: WebhookSettingTab | null = null;
 
 	// Handlers
 	private fileHandler: FileHandler | null = null;
@@ -81,7 +82,8 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 		this.initializeHandlers();
 
 		// Add settings tab
-		this.addSettingTab(new WebhookSettingTab(this.app, this));
+		this.settingTab = new WebhookSettingTab(this.app, this);
+		this.addSettingTab(this.settingTab);
 
 		// Add status bar item
 		this.statusBarItem = this.addStatusBarItem();
@@ -100,6 +102,7 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 	 */
 	onunload() {
 		this.disconnect();
+		this.settingTab = null;
 	}
 
 	/**
@@ -186,7 +189,8 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 			this.settings.serverUrl,
 			this.settings.clientKey,
 			(event: WebhookEvent) => this.handleEvent(event),
-			(state: string, message: string) => this.updateConnectionState(state as ConnectionState, message)
+			(state: string, message: string) =>
+				this.handleTransportState(state as ConnectionState, message)
 		);
 
 		this.log("Handlers initialized");
@@ -217,13 +221,6 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 				this.sseHandler.connect();
 			}
 
-			// Start periodic polling if enabled
-			if (this.settings.enablePolling && this.pollingHandler) {
-				const intervalMs = this.settings.pollingInterval * 1000;
-				this.log(`Starting polling with ${intervalMs}ms interval`);
-				this.pollingHandler.start(intervalMs);
-			}
-
 			this.log("Connection established");
 
 		} catch (error) {
@@ -232,6 +229,38 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 			this.updateConnectionState("error", `Connection failed: ${errorMsg}`);
 			new Notice(`Failed to connect: ${errorMsg}`);
 		}
+	}
+
+	/**
+	 * Keep polling as a genuine fallback. Running it continuously alongside a
+	 * healthy SSE stream wastes tunnel request quotas, especially on free plans.
+	 */
+	private handleTransportState(state: ConnectionState, message: string): void {
+		this.updateConnectionState(state, message);
+
+		if (!this.pollingHandler || !this.settings.enablePolling) {
+			return;
+		}
+
+		if (state === "connected") {
+			this.pollingHandler.stop();
+			return;
+		}
+
+		if (state === "error" && !this.pollingHandler.isPolling()) {
+			const intervalMs = this.settings.pollingInterval * 1000;
+			this.log(`SSE unavailable; starting polling fallback every ${intervalMs}ms`);
+			this.pollingHandler.start(intervalMs);
+		}
+	}
+
+	/**
+	 * Recreate connection handlers after the user changes connection settings.
+	 */
+	async reconnectWithCurrentSettings() {
+		this.disconnect();
+		this.initializeHandlers();
+		await this.connect();
 	}
 
 	/**
@@ -366,6 +395,7 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 		this.connectionStatus.message = message;
 		this.connectionStatus.lastUpdate = new Date();
 		this.updateStatusBar();
+		this.settingTab?.updateConnectionStatus();
 		this.log(`Connection state: ${state} - ${message}`);
 	}
 
@@ -412,4 +442,3 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 		}
 	}
 }
-

@@ -1,32 +1,69 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
+	"net"
+	"net/mail"
+	"net/smtp"
+	"net/textproto"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/khabaroff/obsidian-webhooks-selfhosted/src/templates"
-	"github.com/mailgun/mailgun-go/v4"
 )
 
-// EmailService handles transactional email sending via Mailgun
-type EmailService struct {
-	mg        *mailgun.MailgunImpl
-	fromEmail string
-	fromName  string
-	domain    string
+// SMTPConfig configures transactional email delivery through any SMTP server.
+type SMTPConfig struct {
+	Host      string
+	Port      int
+	Username  string
+	Password  string
+	FromEmail string
+	FromName  string
+	BaseURL   string
+	// TLSMode must be "starttls", "tls" (implicit TLS), or "none".
+	TLSMode string
 }
 
-// NewEmailService creates a new email service with Mailgun configuration
-func NewEmailService(domain, apiKey, fromEmail, fromName string) *EmailService {
-	mg := mailgun.NewMailgun(domain, apiKey)
-	mg.SetAPIBase(mailgun.APIBaseEU) // Use EU endpoint for GDPR compliance
+// EmailService handles transactional email sending via SMTP.
+type EmailService struct {
+	config SMTPConfig
+}
 
-	return &EmailService{
-		mg:        mg,
-		fromEmail: fromEmail,
-		fromName:  fromName,
-		domain:    domain,
+// NewEmailService creates a provider-neutral SMTP email service.
+func NewEmailService(config SMTPConfig) *EmailService {
+	config.TLSMode = strings.ToLower(strings.TrimSpace(config.TLSMode))
+	config.BaseURL = strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
+	if config.TLSMode == "" {
+		config.TLSMode = "starttls"
+	}
+	return &EmailService{config: config}
+}
+
+const defaultPublicBaseURL = "https://obsidian-webhooks.khabaroff.studio"
+
+func (s *EmailService) publicBaseURL() string {
+	if s.config.BaseURL != "" {
+		return s.config.BaseURL
+	}
+	return defaultPublicBaseURL
+}
+
+func (s *EmailService) applyPublicURLs(config *templates.EmailConfig) {
+	baseURL := s.publicBaseURL()
+	config.Branding.Website = baseURL
+	config.Branding.DashboardURL = baseURL + "/dashboard"
+	config.Branding.DocsURL = baseURL + "/guides/"
+	config.Welcome.HelpText = strings.ReplaceAll(config.Welcome.HelpText, defaultPublicBaseURL, baseURL)
+	for index, step := range config.Welcome.Steps {
+		config.Welcome.Steps[index] = strings.ReplaceAll(step, defaultPublicBaseURL, baseURL)
 	}
 }
 
@@ -89,6 +126,7 @@ func (s *EmailService) SendMagicLinkEmail(ctx context.Context, toEmail, toName, 
 	if err != nil {
 		config = getDefaultEmailConfig()
 	}
+	s.applyPublicURLs(config)
 
 	subject := config.Subjects.MagicLink
 
@@ -134,19 +172,7 @@ func (s *EmailService) SendMagicLinkEmail(ctx context.Context, toEmail, toName, 
 		textBody = s.getMagicLinkPlainTextTemplate(toName, magicLink, expiryMinutes)
 	}
 
-	message := s.mg.NewMessage(
-		fmt.Sprintf("%s <%s>", s.fromName, s.fromEmail),
-		subject,
-		textBody,
-		toEmail,
-	)
-	message.SetHtml(htmlBody)
-
-	// Set timeout for sending
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Second*30)
-	defer cancel()
-
-	_, _, err = s.mg.Send(ctxWithTimeout, message)
+	err = s.send(ctx, toEmail, subject, textBody, htmlBody)
 	if err != nil {
 		return fmt.Errorf("failed to send magic link email to %s: %w", toEmail, err)
 	}
@@ -160,6 +186,7 @@ func (s *EmailService) SendWelcomeEmail(ctx context.Context, toEmail, toName, la
 	if err != nil {
 		config = getDefaultEmailConfig()
 	}
+	s.applyPublicURLs(config)
 
 	subject := config.Subjects.Welcome
 
@@ -204,24 +231,149 @@ func (s *EmailService) SendWelcomeEmail(ctx context.Context, toEmail, toName, la
 		textBody = s.getWelcomePlainTextTemplate(toName)
 	}
 
-	message := s.mg.NewMessage(
-		fmt.Sprintf("%s <%s>", s.fromName, s.fromEmail),
-		subject,
-		textBody,
-		toEmail,
-	)
-	message.SetHtml(htmlBody)
-
-	// Set timeout for sending
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Second*30)
-	defer cancel()
-
-	_, _, err = s.mg.Send(ctxWithTimeout, message)
+	err = s.send(ctx, toEmail, subject, textBody, htmlBody)
 	if err != nil {
 		return fmt.Errorf("failed to send welcome email to %s: %w", toEmail, err)
 	}
 
 	return nil
+}
+
+func (s *EmailService) send(ctx context.Context, toEmail, subject, textBody, htmlBody string) error {
+	message, err := s.buildMessage(toEmail, subject, textBody, htmlBody)
+	if err != nil {
+		return err
+	}
+	fromAddress, _ := mail.ParseAddress(s.config.FromEmail)
+	toAddress, _ := mail.ParseAddress(toEmail)
+
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	address := net.JoinHostPort(s.config.Host, strconv.Itoa(s.config.Port))
+	dialer := &net.Dialer{Timeout: 30 * time.Second}
+	conn, err := dialer.DialContext(ctxWithTimeout, "tcp", address)
+	if err != nil {
+		return fmt.Errorf("connect to SMTP server: %w", err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	if contextDeadline, ok := ctxWithTimeout.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("set SMTP connection deadline: %w", err)
+	}
+
+	tlsConfig := &tls.Config{ServerName: s.config.Host, MinVersion: tls.VersionTLS12}
+	if s.config.TLSMode == "tls" {
+		tlsConn := tls.Client(conn, tlsConfig)
+		if err := tlsConn.HandshakeContext(ctxWithTimeout); err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("establish implicit SMTP TLS: %w", err)
+		}
+		conn = tlsConn
+	} else if s.config.TLSMode != "starttls" && s.config.TLSMode != "none" {
+		_ = conn.Close()
+		return fmt.Errorf("invalid SMTP_TLS_MODE %q (expected starttls, tls, or none)", s.config.TLSMode)
+	}
+
+	client, err := smtp.NewClient(conn, s.config.Host)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("initialize SMTP client: %w", err)
+	}
+	defer client.Close()
+
+	if s.config.TLSMode == "starttls" {
+		if supported, _ := client.Extension("STARTTLS"); !supported {
+			return fmt.Errorf("SMTP server does not advertise STARTTLS")
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			return fmt.Errorf("establish SMTP STARTTLS: %w", err)
+		}
+	}
+
+	if s.config.Username != "" {
+		auth := smtp.PlainAuth("", s.config.Username, s.config.Password, s.config.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("authenticate with SMTP server: %w", err)
+		}
+	}
+	if err := client.Mail(fromAddress.Address); err != nil {
+		return fmt.Errorf("set SMTP sender: %w", err)
+	}
+	if err := client.Rcpt(toAddress.Address); err != nil {
+		return fmt.Errorf("set SMTP recipient: %w", err)
+	}
+
+	writer, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("start SMTP message body: %w", err)
+	}
+	if _, err := writer.Write(message); err != nil {
+		_ = writer.Close()
+		return fmt.Errorf("write SMTP message body: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("finish SMTP message body: %w", err)
+	}
+	if err := client.Quit(); err != nil {
+		return fmt.Errorf("finish SMTP session: %w", err)
+	}
+	return nil
+}
+
+func (s *EmailService) buildMessage(toEmail, subject, textBody, htmlBody string) ([]byte, error) {
+	from, err := mail.ParseAddress(s.config.FromEmail)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SMTP_FROM_EMAIL: %w", err)
+	}
+	to, err := mail.ParseAddress(toEmail)
+	if err != nil {
+		return nil, fmt.Errorf("invalid recipient email: %w", err)
+	}
+	from.Name = s.config.FromName
+
+	var body bytes.Buffer
+	multipartWriter := multipart.NewWriter(&body)
+	for _, part := range []struct {
+		contentType string
+		body        string
+	}{
+		{contentType: `text/plain; charset="UTF-8"`, body: textBody},
+		{contentType: `text/html; charset="UTF-8"`, body: htmlBody},
+	} {
+		header := make(textproto.MIMEHeader)
+		header.Set("Content-Type", part.contentType)
+		header.Set("Content-Transfer-Encoding", "quoted-printable")
+		partWriter, err := multipartWriter.CreatePart(header)
+		if err != nil {
+			return nil, fmt.Errorf("create email MIME part: %w", err)
+		}
+		quotedWriter := quotedprintable.NewWriter(partWriter)
+		if _, err := quotedWriter.Write([]byte(part.body)); err != nil {
+			return nil, fmt.Errorf("encode email MIME part: %w", err)
+		}
+		if err := quotedWriter.Close(); err != nil {
+			return nil, fmt.Errorf("finish email MIME part: %w", err)
+		}
+	}
+	if err := multipartWriter.Close(); err != nil {
+		return nil, fmt.Errorf("finish email MIME body: %w", err)
+	}
+
+	cleanSubject := strings.NewReplacer("\r", " ", "\n", " ").Replace(subject)
+	var message bytes.Buffer
+	fmt.Fprintf(&message, "From: %s\r\n", from.String())
+	fmt.Fprintf(&message, "To: %s\r\n", to.String())
+	fmt.Fprintf(&message, "Subject: %s\r\n", mime.QEncoding.Encode("UTF-8", cleanSubject))
+	fmt.Fprintf(&message, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
+	fmt.Fprint(&message, "MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&message, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", multipartWriter.Boundary())
+	message.Write(body.Bytes())
+	return message.Bytes(), nil
 }
 
 // getMagicLinkHTMLTemplate returns the HTML template for magic link email
@@ -263,11 +415,11 @@ func (s *EmailService) getMagicLinkHTMLTemplate(name, magicLink string, expiryMi
         </td></tr>
         <tr><td style="padding:24px;border-top:1px solid #e5e5e5;">
             <p style="margin:0 0 4px;font-size:12px;color:#777;">Khabaroff Studio: Obsidian Webhooks — Webhook delivery to Obsidian</p>
-            <a href="https://obsidian-webhooks.khabaroff.studio" style="font-size:12px;color:#777;">obsidian-webhooks.khabaroff.studio</a>
+			<a href="%s" style="font-size:12px;color:#777;">%s</a>
         </td></tr>
     </table>
 </body>
-</html>`, displayName, magicLink, expiryMinutes, magicLink)
+</html>`, displayName, magicLink, expiryMinutes, magicLink, s.publicBaseURL(), s.publicBaseURL())
 }
 
 // getMagicLinkPlainTextTemplate returns the plain text template for magic link email
@@ -290,7 +442,7 @@ Didn't request this? Ignore this email.
 —
 Khabaroff Studio: Obsidian Webhooks
 Webhook delivery to Obsidian
-https://obsidian-webhooks.khabaroff.studio`, displayName, magicLink, expiryMinutes)
+%s`, displayName, magicLink, expiryMinutes, s.publicBaseURL())
 }
 
 // getWelcomeHTMLTemplate returns the HTML template for welcome email
@@ -336,7 +488,7 @@ func (s *EmailService) getWelcomeHTMLTemplate(name string) string {
             </tr></table>
             <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0;"><tr>
                 <td style="background:#7C3AED;padding:14px 32px;">
-                    <a href="https://obsidian-webhooks.khabaroff.studio/dashboard" style="color:#fff;text-decoration:none;font-size:14px;font-weight:600;">Open Dashboard</a>
+					<a href="%s" style="color:#fff;text-decoration:none;font-size:14px;font-weight:600;">Open Dashboard</a>
                 </td>
             </tr></table>
             <p style="margin:0 0 8px;font-size:14px;font-weight:600;">Quick start:</p>
@@ -345,11 +497,11 @@ func (s *EmailService) getWelcomeHTMLTemplate(name string) string {
         </td></tr>
         <tr><td style="padding:24px;border-top:1px solid #e5e5e5;">
             <p style="margin:0 0 4px;font-size:12px;color:#777;">Khabaroff Studio: Obsidian Webhooks — Webhook delivery to Obsidian</p>
-            <a href="https://obsidian-webhooks.khabaroff.studio" style="font-size:12px;color:#777;">obsidian-webhooks.khabaroff.studio</a>
+			<a href="%s" style="font-size:12px;color:#777;">%s</a>
         </td></tr>
     </table>
 </body>
-</html>`, displayName)
+</html>`, displayName, s.publicBaseURL()+"/dashboard", s.publicBaseURL(), s.publicBaseURL())
 }
 
 // getWelcomePlainTextTemplate returns the plain text template for welcome email
@@ -379,12 +531,12 @@ Quick start:
 2. Paste your client_key in plugin settings
 3. Send a test webhook — note appears in 1-3 seconds
 
-Open your dashboard: https://obsidian-webhooks.khabaroff.studio/dashboard
+Open your dashboard: %s
 
 Questions? Check the docs on GitHub or reply to this email.
 
 —
 Khabaroff Studio: Obsidian Webhooks
 Webhook delivery to Obsidian
-https://obsidian-webhooks.khabaroff.studio`, displayName)
+%s`, displayName, s.publicBaseURL()+"/dashboard", s.publicBaseURL())
 }

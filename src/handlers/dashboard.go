@@ -19,6 +19,7 @@ type DashboardHandler struct {
 	eventService *services.EventService
 	db           *pgxpool.Pool
 	authService  *services.AuthService
+	cookieSecure bool
 }
 
 // NewDashboardHandler creates a new dashboard handler
@@ -30,11 +31,12 @@ func NewDashboardHandler(keyService *services.KeyService, eventService *services
 }
 
 // NewDashboardHandlerWithAuth creates a new dashboard handler with auth service
-func NewDashboardHandlerWithAuth(db *pgxpool.Pool, authService *services.AuthService, keyService *services.KeyService) *DashboardHandler {
+func NewDashboardHandlerWithAuth(db *pgxpool.Pool, authService *services.AuthService, keyService *services.KeyService, cookieSecure bool) *DashboardHandler {
 	return &DashboardHandler{
-		db:          db,
-		authService: authService,
-		keyService:  keyService,
+		db:           db,
+		authService:  authService,
+		keyService:   keyService,
+		cookieSecure: cookieSecure,
 	}
 }
 
@@ -94,14 +96,12 @@ func (dh *DashboardHandler) HandleGetUserData(c *gin.Context) {
 // HandleLogout logs out the user by clearing the session cookie
 func (dh *DashboardHandler) HandleLogout(c *gin.Context) {
 	// Clear session cookie
-	c.SetCookie(
+	setAuthCookie(
+		c,
 		"session_token",
 		"",
 		-1, // Expire immediately
-		"/",
-		"",
-		true, // Secure (HTTPS only)
-		true, // HttpOnly
+		dh.cookieSecure,
 	)
 
 	c.JSON(http.StatusOK, gin.H{

@@ -8,8 +8,46 @@
  */
 
 import { describe, test, expect, beforeEach, mock } from "bun:test";
-import { FileHandler } from "./file_handler";
+import { parse, stringify } from "yaml";
+
+mock.module("obsidian", () => ({
+	TAbstractFile: class {},
+	TFile: class {
+		static [Symbol.hasInstance](value: unknown): boolean {
+			return (
+				typeof value === "object" &&
+				value !== null &&
+				"extension" in value
+			);
+		}
+	},
+	normalizePath: (path: string) => path.replace(/^\/+|\/+$/g, ""),
+	parseYaml: parse,
+	requestUrl: async (options: {
+		url: string;
+		method?: string;
+		headers?: Record<string, string>;
+		body?: string;
+	}) => {
+		const request: RequestInit = {
+			method: options.method,
+			headers: options.headers,
+		};
+		if (options.body !== undefined) {
+			request.body = options.body;
+		}
+		const response = await globalThis.fetch(options.url, request);
+		return {
+			status: response.status,
+			json: typeof response.json === "function" ? await response.json() : null,
+		};
+	},
+	stringifyYaml: stringify,
+}));
+
 import type { WebhookEvent, FileOperationOptions } from "../types";
+
+const { FileHandler } = await import("./file_handler");
 
 // Mock Obsidian Vault API
 interface MockFile {
@@ -18,6 +56,11 @@ interface MockFile {
 }
 
 interface MockVault {
+	adapter: {
+		exists: ReturnType<typeof mock>;
+		read: ReturnType<typeof mock>;
+		write: ReturnType<typeof mock>;
+	};
 	getAbstractFileByPath: ReturnType<typeof mock>;
 	create: ReturnType<typeof mock>;
 	modify: ReturnType<typeof mock>;
@@ -32,6 +75,13 @@ describe("FileHandler", () => {
 	beforeEach(() => {
 		// Create fresh mocks for each test
 		mockVault = {
+			adapter: {
+				exists: mock(async (path: string) =>
+					mockVault.getAbstractFileByPath(path) !== null
+				),
+				read: mock(async () => ""),
+				write: mock(async () => {}),
+			},
 			getAbstractFileByPath: mock(() => null),
 			create: mock(async () => {}),
 			modify: mock(async () => {}),
@@ -208,6 +258,118 @@ describe("FileHandler", () => {
 				"inbox/note.md",
 				"New content"
 			);
+		});
+	});
+
+	describe("Frontmatter Mode", () => {
+		const options: FileOperationOptions = {
+			mode: "frontmatter",
+			createDirs: true,
+		};
+
+		test("should merge individual YAML fields and preserve the exact body", async () => {
+			const event: WebhookEvent = {
+				id: "frontmatter-fields",
+				path: "notes/project.md",
+				data: "status: done\npriority: 2",
+				created_at: new Date().toISOString(),
+			};
+			const mockFile: MockFile = {
+				path: event.path,
+				extension: "md",
+			};
+			const body = "\n\n# Project\n\nKeep  this exactly.\n";
+
+			mockVault.getAbstractFileByPath.mockReturnValue(mockFile);
+			mockVault.read.mockResolvedValue(
+				`---\nstatus: open\nowner: Alice\n---${body}`
+			);
+
+			await fileHandler.processEvent(event, options);
+
+			const written = mockVault.modify.mock.calls[0][1] as string;
+			const closingDelimiter = written.indexOf("---", 3);
+			const metadata = parse(written.slice(4, closingDelimiter));
+			expect(metadata).toEqual({
+				status: "done",
+				owner: "Alice",
+				priority: 2,
+			});
+			expect(written.slice(closingDelimiter + 3)).toBe(body);
+		});
+
+		test("should merge a complete frontmatter block", async () => {
+			const event: WebhookEvent = {
+				id: "frontmatter-block",
+				path: "notes/project.md",
+				data: "---\nstatus: archived\ntags: [project, done]\n---",
+				created_at: new Date().toISOString(),
+			};
+			const mockFile: MockFile = {
+				path: event.path,
+				extension: "md",
+			};
+
+			mockVault.getAbstractFileByPath.mockReturnValue(mockFile);
+			mockVault.read.mockResolvedValue("---\nstatus: open\n---\nBody");
+
+			await fileHandler.processEvent(event, options);
+
+			expect(mockVault.modify.mock.calls[0][1]).toBe(
+				"---\nstatus: archived\ntags:\n  - project\n  - done\n---\nBody"
+			);
+		});
+
+		test("should add frontmatter to a note without changing its body", async () => {
+			const event: WebhookEvent = {
+				id: "frontmatter-new-block",
+				path: "notes/plain.md",
+				data: '{"reviewed":true}',
+				created_at: new Date().toISOString(),
+			};
+			const mockFile: MockFile = {
+				path: event.path,
+				extension: "md",
+			};
+
+			mockVault.getAbstractFileByPath.mockReturnValue(mockFile);
+			mockVault.read.mockResolvedValue("# Plain note\n\nBody");
+
+			await fileHandler.processEvent(event, options);
+
+			expect(mockVault.modify.mock.calls[0][1]).toBe(
+				"---\nreviewed: true\n---\n# Plain note\n\nBody"
+			);
+		});
+
+		test("should create a metadata-only note when the file does not exist", async () => {
+			const event: WebhookEvent = {
+				id: "frontmatter-new-file",
+				path: "notes/new.md",
+				data: "status: new",
+				created_at: new Date().toISOString(),
+			};
+
+			await fileHandler.processEvent(event, options);
+
+			expect(mockVault.create).toHaveBeenCalledWith(
+				"notes/new.md",
+				"---\nstatus: new\n---\n"
+			);
+		});
+
+		test("should reject a frontmatter block followed by body content", async () => {
+			const event: WebhookEvent = {
+				id: "frontmatter-with-body",
+				path: "notes/project.md",
+				data: "---\nstatus: done\n---\nThis must not be discarded",
+				created_at: new Date().toISOString(),
+			};
+
+			await expect(fileHandler.processEvent(event, options)).rejects.toThrow(
+				"must contain only one complete YAML frontmatter block"
+			);
+			expect(mockVault.modify).not.toHaveBeenCalled();
 		});
 	});
 

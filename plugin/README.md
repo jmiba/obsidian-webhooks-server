@@ -7,7 +7,7 @@ Receive webhooks from external services and create notes in your vault via a sel
 - **Real-time delivery** via Server-Sent Events (SSE) with polling fallback
 - **Exactly-once delivery** with acknowledgment (ACK) system
 - **Event deduplication** prevents duplicate writes
-- **Append or overwrite** mode for file content
+- **Append, overwrite, or frontmatter-update** mode
 - **Auto-create folders** when target path doesn't exist
 - **Connection status** in the status bar
 - **Self-hosted** — your data stays on your server
@@ -50,6 +50,20 @@ curl -X POST "https://your-server.com/webhook/YOUR_WEBHOOK_KEY?path=inbox/note.m
 ```
 
 The content will appear in your vault at the specified path.
+
+To update metadata without replacing the note body, open **Advanced > Write
+mode** and select **Update YAML frontmatter**. Send either a complete
+`---`-delimited frontmatter block or only the YAML fields to merge:
+
+```bash
+curl -X POST "https://your-server.com/webhook/YOUR_WEBHOOK_KEY?path=projects/example.md" \
+  -H "Content-Type: text/plain" \
+  --data-binary $'status: done\nreviewed: true'
+```
+
+The plugin overwrites matching fields, creates missing fields, and leaves all
+unspecified metadata and Markdown body content unchanged. JSON objects are also
+accepted in this mode.
 
 ## Credits
 

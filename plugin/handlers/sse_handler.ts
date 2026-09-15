@@ -14,6 +14,7 @@
  */
 
 import type { WebhookEvent } from "../types";
+import { getTunnelRequestHeaders } from "../utils/request-headers";
 
 /**
  * Callback type for handling received events
@@ -59,6 +60,8 @@ export class SSEHandler {
 	private options: Required<SSEHandlerOptions>;
 
 	private eventSource: EventSource | null = null;
+	private fetchAbortController: AbortController | null = null;
+	private fetchConnected: boolean = false;
 	private reconnectAttempts: number = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private isManualDisconnect: boolean = false;
@@ -94,10 +97,8 @@ export class SSEHandler {
 	 *
 	 */
 	connect(): void {
-		// If already connected, disconnect first
-		if (this.eventSource) {
-			this.disconnect();
-		}
+		// Close an existing transport before opening a replacement.
+		this.closeCurrentConnection();
 
 		// Mark as intentional connection
 		this.isManualDisconnect = false;
@@ -114,6 +115,14 @@ export class SSEHandler {
 		try {
 			// Build SSE endpoint URL
 			const url = `${this.serverUrl}/events/${this.clientKey}`;
+			const tunnelHeaders = getTunnelRequestHeaders(this.serverUrl);
+
+			// Browser EventSource cannot attach request headers. Free ngrok endpoints
+			// require a bypass header, so use a fetch-backed SSE stream there.
+			if (Object.keys(tunnelHeaders).length > 0) {
+				void this.connectWithFetch(url, tunnelHeaders);
+				return;
+			}
 
 			// Create EventSource
 			this.eventSource = new EventSource(url);
@@ -150,11 +159,7 @@ export class SSEHandler {
 			this.reconnectTimer = null;
 		}
 
-		// Close EventSource
-		if (this.eventSource) {
-			this.eventSource.close();
-			this.eventSource = null;
-		}
+		this.closeCurrentConnection();
 
 		// Reset reconnect attempts
 		this.reconnectAttempts = 0;
@@ -169,10 +174,137 @@ export class SSEHandler {
 	 * @returns true if connected, false otherwise
 	 */
 	isConnected(): boolean {
-		return (
+		return this.fetchConnected || (
 			this.eventSource !== null &&
 			this.eventSource.readyState === EventSource.OPEN
 		);
+	}
+
+	private closeCurrentConnection(): void {
+		if (this.eventSource) {
+			this.eventSource.close();
+			this.eventSource = null;
+		}
+
+		if (this.fetchAbortController) {
+			const controller = this.fetchAbortController;
+			this.fetchAbortController = null;
+			controller.abort();
+		}
+		this.fetchConnected = false;
+	}
+
+	/**
+	 * Open an SSE stream with fetch so tunnel-specific request headers can be
+	 * included. EventSource does not expose a headers option.
+	 */
+	private async connectWithFetch(
+		url: string,
+		tunnelHeaders: Record<string, string>
+	): Promise<void> {
+		const controller = new AbortController();
+		this.fetchAbortController = controller;
+
+		try {
+			const response = await globalThis.fetch(url, {
+				method: "GET",
+				headers: {
+					Accept: "text/event-stream",
+					...tunnelHeaders,
+				},
+				cache: "no-store",
+				credentials: "omit",
+				signal: controller.signal,
+			});
+
+			if (!response.ok) {
+				throw new Error(`Server returned ${response.status}`);
+			}
+			if (!response.body) {
+				throw new Error("Server returned no event stream");
+			}
+			if (controller !== this.fetchAbortController || this.isManualDisconnect) {
+				return;
+			}
+
+			this.fetchConnected = true;
+			this.reconnectAttempts = 0;
+			this.onStateChange("connected", "SSE connection established");
+
+			await this.consumeFetchStream(response.body, controller);
+			if (!controller.signal.aborted) {
+				throw new Error("Event stream closed");
+			}
+		} catch (error) {
+			if (
+				controller.signal.aborted ||
+				this.isManualDisconnect ||
+				controller !== this.fetchAbortController
+			) {
+				return;
+			}
+
+			this.fetchConnected = false;
+			this.fetchAbortController = null;
+			const message = error instanceof Error ? error.message : String(error);
+			this.onStateChange("error", `SSE connection failed: ${message}`);
+
+			if (this.options.autoReconnect) {
+				this.scheduleReconnect();
+			}
+		}
+	}
+
+	private async consumeFetchStream(
+		stream: ReadableStream<Uint8Array>,
+		controller: AbortController
+	): Promise<void> {
+		const reader = stream.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+
+		try {
+			while (!controller.signal.aborted) {
+				const { done, value } = await reader.read();
+				if (done) {
+					break;
+				}
+
+				buffer += decoder.decode(value, { stream: true });
+				let boundary = buffer.match(/\r?\n\r?\n/);
+				while (boundary?.index !== undefined) {
+					const eventBlock = buffer.slice(0, boundary.index);
+					buffer = buffer.slice(boundary.index + boundary[0].length);
+					await this.handleFetchEventBlock(eventBlock);
+					boundary = buffer.match(/\r?\n\r?\n/);
+				}
+			}
+		} finally {
+			reader.releaseLock();
+		}
+	}
+
+	private async handleFetchEventBlock(eventBlock: string): Promise<void> {
+		const data = eventBlock
+			.split(/\r?\n/)
+			.filter((line) => line.startsWith("data:"))
+			.map((line) => line.slice(5).replace(/^ /, ""))
+			.join("\n");
+
+		// Heartbeats and comments do not contain a data field.
+		if (!data) {
+			return;
+		}
+
+		try {
+			const webhookEvent = JSON.parse(data) as WebhookEvent;
+			await this.onEvent(webhookEvent);
+		} catch (error) {
+			console.error(
+				"Error parsing SSE event:",
+				error instanceof Error ? error.message : error
+			);
+		}
 	}
 
 	/**

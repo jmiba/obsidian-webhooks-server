@@ -20,7 +20,7 @@ git clone https://github.com/khabaroff-studio/obsidian-webhooks-server.git
 cd obsidian-webhooks-server
 
 cp .env.example .env
-# Edit .env: DATABASE_URL, JWT_SECRET, MAILGUN credentials
+# Edit .env: DATABASE_URL, JWT_SECRET, SMTP credentials
 
 docker compose up -d
 ```
@@ -82,6 +82,31 @@ source: n8n
 
 Non-JSON body is written as-is. Max payload: 10 MB.
 
+### Update YAML Frontmatter Only
+
+In the Obsidian plugin, open **Advanced > Write mode** and select
+**Update YAML frontmatter**. Each webhook body can then be either a complete
+frontmatter block:
+
+```yaml
+---
+status: done
+tags: [project, reviewed]
+---
+```
+
+or just the YAML fields to update:
+
+```yaml
+status: done
+reviewed: true
+```
+
+A JSON object such as `{"status":"done","reviewed":true}` is also accepted.
+Existing fields with the same names are replaced, new fields are added, and
+unspecified frontmatter fields and the Markdown body remain unchanged. If the
+note does not exist, the plugin creates a metadata-only note.
+
 ## Use Cases
 
 **Email to Notes (Zapier/Make):**
@@ -111,7 +136,7 @@ requests.post(
 | Server | Go 1.24, Gin |
 | Database | PostgreSQL (Supabase) |
 | Plugin | TypeScript, Obsidian API |
-| Auth | Mailgun (magic links), JWT |
+| Auth | SMTP magic links, JWT |
 | Encryption | AES-256-GCM |
 | Frontend | Tailwind CSS (pre-built) |
 | Deploy | Docker, Nginx |
@@ -125,9 +150,12 @@ requests.post(
 DATABASE_URL=postgres://user:pass@host:5432/db
 JWT_SECRET=your-random-secret           # openssl rand -base64 32
 ENCRYPTION_KEY=64-char-hex-string       # openssl rand -hex 32
-MAILGUN_DOMAIN=mail.yourdomain.com
-MAILGUN_API_KEY=your-mailgun-key
-MAILGUN_FROM_EMAIL=noreply@yourdomain.com
+SMTP_HOST=smtp.your-provider.com
+SMTP_PORT=587
+SMTP_USERNAME=your-smtp-user
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM_EMAIL=noreply@yourdomain.com
+SMTP_TLS_MODE=starttls
 ```
 
 ### Admin (first run only)
