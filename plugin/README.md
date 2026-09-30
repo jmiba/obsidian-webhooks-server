@@ -14,7 +14,7 @@ Receive webhooks from external services and create notes in your vault via a sel
 
 ## Requirements
 
-- A running instance of [Webhooks Server](https://github.com/khabaroff-studio/obsidian-webhooks-v2)
+- A running instance of [Webhooks Server](https://github.com/jmiba/obsidian-webhooks-server)
 - A client key from the server dashboard
 
 ## Network usage
@@ -31,7 +31,7 @@ This plugin connects to your self-hosted webhook server to receive events via SS
 
 ### Manual
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/khabaroff-studio/obsidian-webhooks-v2/releases)
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/jmiba/obsidian-webhooks-server/releases)
 2. Create a folder `webhooks-v2` in your vault's `.obsidian/plugins/` directory
 3. Copy the downloaded files into that folder
 4. Enable the plugin in **Settings > Community plugins**

@@ -328,7 +328,7 @@ Server sends via SSE (if connected)
 ## Support
 
 - 📖 Documentation: https://obsidian-webhooks.khabaroff.studio
-- 🐛 Issues: https://github.com/khabaroff-studio/obsidian-webhooks-server/issues
+- 🐛 Issues: https://github.com/jmiba/obsidian-webhooks-server/issues
 - 📧 Email: support@khabaroff.studio
 
 ---

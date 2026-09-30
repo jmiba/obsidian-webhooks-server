@@ -16,7 +16,7 @@ Receive webhooks from Zapier, Make, n8n, AI agents, or any HTTP client. Events a
 ## Quick Start
 
 ```bash
-git clone https://github.com/khabaroff-studio/obsidian-webhooks-server.git
+git clone https://github.com/jmiba/obsidian-webhooks-server.git
 cd obsidian-webhooks-server
 
 cp .env.example .env
