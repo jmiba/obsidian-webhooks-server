@@ -67,6 +67,36 @@ func TestEventService_CreateEvent(t *testing.T) {
 	})
 }
 
+func TestEventService_CreateEventWithMode(t *testing.T) {
+	ctx := context.Background()
+	webhookKeyID := uuid.New()
+	mockRepo := mock.NewEventRepository()
+	var storedEvent *models.Event
+	mockRepo.CreateFunc = func(ctx context.Context, event *models.Event) error {
+		storedEvent = event
+		return nil
+	}
+
+	service := NewEventServiceWithRepo(mockRepo)
+	event, err := service.CreateEventWithMode(
+		ctx,
+		webhookKeyID,
+		"notes/test.md",
+		[]byte("status: done"),
+		"frontmatter",
+		24*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if event.WriteMode != "frontmatter" {
+		t.Fatalf("expected returned mode frontmatter, got %q", event.WriteMode)
+	}
+	if storedEvent == nil || storedEvent.WriteMode != "frontmatter" {
+		t.Fatalf("expected persisted mode frontmatter, got %#v", storedEvent)
+	}
+}
+
 func TestEventService_GetEventByID(t *testing.T) {
 	ctx := context.Background()
 	eventID := uuid.New()

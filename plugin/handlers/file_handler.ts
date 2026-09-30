@@ -14,7 +14,6 @@ import {
 	parseYaml,
 	stringifyYaml,
 } from "obsidian";
-import { formatData } from "../utils/json-formatter";
 
 /**
  * Default options for file operations
@@ -53,6 +52,7 @@ export class FileHandler {
 
 		// Merge options with defaults
 		const opts = { ...DEFAULT_OPTIONS, ...options };
+		this.validateMode(opts.mode);
 
 		// Ensure parent directory exists
 		await this.ensureDirectoryExists(path);
@@ -68,6 +68,10 @@ export class FileHandler {
 				await this.createFrontmatterFile(path, fields);
 			}
 			return;
+		}
+
+		if (opts.mode === "create" && fileExists) {
+			throw new Error(`File already exists: ${path}`);
 		}
 
 		// Prepare content with optional separator
@@ -88,7 +92,13 @@ export class FileHandler {
 			}
 		} else {
 			// File doesn't exist - create it
-			await this.createNewFile(path, content);
+			await this.createNewFile(path, content, opts.mode !== "create");
+		}
+	}
+
+	private validateMode(mode: FileOperationOptions["mode"]): void {
+		if (!["create", "append", "overwrite", "frontmatter"].includes(mode)) {
+			throw new Error(`Unsupported write mode: ${String(mode)}`);
 		}
 	}
 
@@ -227,23 +237,18 @@ export class FileHandler {
 	}
 
 	/**
-	 * Prepare content with optional separator and JSON formatting
+	 * Prepare raw content with an optional append separator.
 	 */
 	private prepareContent(
 		data: string,
 		options: FileOperationOptions
 	): string {
-		// Format JSON data to Markdown if applicable
-		let content = formatData(data, {
-			enabled: true,
-			prettyPrintUnknown: false,
-		});
-
-		// Add separator as suffix when creating new files or in append mode
-		if (options.separator) {
-			return content + options.separator;
+		// Separators belong only to append operations. Create and overwrite must
+		// write the supplied content without adding bytes.
+		if (options.mode === "append" && options.separator) {
+			return data + options.separator;
 		}
-		return content;
+		return data;
 	}
 
 	/**
@@ -340,12 +345,19 @@ export class FileHandler {
 	 * Create a new file with content
 	 * If file already exists (race condition), fall back to updating it
 	 */
-	private async createNewFile(path: string, content: string): Promise<void> {
+	private async createNewFile(
+		path: string,
+		content: string,
+		updateOnRace = true
+	): Promise<void> {
 		try {
 			await this.vault.create(path, content);
 		} catch (error) {
 			// Handle race condition: file was created between check and create
 			if (error instanceof Error && error.message.includes("already exists")) {
+				if (!updateOnRace) {
+					throw new Error(`File already exists: ${path}`);
+				}
 				const existingFile = this.vault.getAbstractFileByPath(path);
 				if (existingFile instanceof TFile) {
 					// File exists now - update it instead (append mode)

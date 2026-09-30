@@ -12,6 +12,7 @@ type Event struct {
 	WebhookKeyID uuid.UUID  `json:"webhook_key_id"`
 	Path         string     `json:"path"`
 	Data         []byte     `json:"data"`
+	WriteMode    string     `json:"mode,omitempty"`
 	Processed    bool       `json:"processed"`
 	ProcessedAt  *time.Time `json:"processed_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`

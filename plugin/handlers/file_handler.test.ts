@@ -261,6 +261,68 @@ describe("FileHandler", () => {
 		});
 	});
 
+	describe("Create Mode", () => {
+		test("should create a new note", async () => {
+			const event: WebhookEvent = {
+				id: "create-note",
+				path: "inbox/new.md",
+				data: "New note",
+				created_at: new Date().toISOString(),
+			};
+
+			await fileHandler.processEvent(event, {
+				mode: "create",
+				createDirs: true,
+			});
+
+			expect(mockVault.create).toHaveBeenCalledWith("inbox/new.md", "New note");
+		});
+
+		test("should preserve JSON bodies exactly for any target extension", async () => {
+			const data = JSON.stringify({
+				title: "Activity",
+				content: "Run completed",
+				tags: ["strava"],
+			});
+			const event: WebhookEvent = {
+				id: "create-json",
+				path: "02 Dateien/Inbox/strava-pending/activity.md",
+				data,
+				created_at: new Date().toISOString(),
+			};
+
+			await fileHandler.processEvent(event, {
+				mode: "create",
+				createDirs: true,
+				separator: "\n",
+			});
+
+			expect(mockVault.create).toHaveBeenCalledWith(event.path, data);
+		});
+
+		test("should not overwrite or append when the note already exists", async () => {
+			const event: WebhookEvent = {
+				id: "create-existing",
+				path: "inbox/existing.md",
+				data: "New note",
+				created_at: new Date().toISOString(),
+			};
+			mockVault.getAbstractFileByPath.mockReturnValue({
+				path: event.path,
+				extension: "md",
+			});
+
+			await expect(
+				fileHandler.processEvent(event, {
+					mode: "create",
+					createDirs: true,
+				})
+			).rejects.toThrow("File already exists");
+			expect(mockVault.modify).not.toHaveBeenCalled();
+			expect(mockVault.create).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("Frontmatter Mode", () => {
 		const options: FileOperationOptions = {
 			mode: "frontmatter",

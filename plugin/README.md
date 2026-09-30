@@ -51,12 +51,18 @@ curl -X POST "https://your-server.com/webhook/YOUR_WEBHOOK_KEY?path=inbox/note.m
 
 The content will appear in your vault at the specified path.
 
-To update metadata without replacing the note body, open **Advanced > Write
-mode** and select **Update YAML frontmatter**. Send either a complete
+In `create`, `append`, and `overwrite` modes, the request body is not parsed or
+converted regardless of its format or target extension. Append mode may insert
+the configured line separator. YAML/JSON parsing occurs only in `frontmatter`
+mode.
+
+To update metadata without replacing the note body, add `mode=frontmatter` to
+the webhook URL. You can alternatively select **Update YAML frontmatter** as
+the default under **Advanced > Write mode**. Send either a complete
 `---`-delimited frontmatter block or only the YAML fields to merge:
 
 ```bash
-curl -X POST "https://your-server.com/webhook/YOUR_WEBHOOK_KEY?path=projects/example.md" \
+curl -X POST "https://your-server.com/webhook/YOUR_WEBHOOK_KEY?path=projects/example.md&mode=frontmatter" \
   -H "Content-Type: text/plain" \
   --data-binary $'status: done\nreviewed: true'
 ```
@@ -64,6 +70,10 @@ curl -X POST "https://your-server.com/webhook/YOUR_WEBHOOK_KEY?path=projects/exa
 The plugin overwrites matching fields, creates missing fields, and leaves all
 unspecified metadata and Markdown body content unchanged. JSON objects are also
 accepted in this mode.
+
+Per-request modes are `create`, `append`, `overwrite`, and `frontmatter`. If no
+mode is supplied, the plugin's configured default is used. `create` never
+overwrites an existing note.
 
 ## Credits
 

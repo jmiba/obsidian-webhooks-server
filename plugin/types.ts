@@ -5,6 +5,14 @@
  * settings, and connection state management.
  */
 
+export type WebhookWriteMode =
+	| "create"
+	| "append"
+	| "overwrite"
+	| "frontmatter";
+
+export type DefaultWriteMode = Exclude<WebhookWriteMode, "create">;
+
 /**
  * WebhookEvent represents a single event received from the webhook server.
  * Events are delivered via SSE or polling and contain the data to be written to vault.
@@ -18,6 +26,9 @@ export interface WebhookEvent {
 
 	/** The actual content/data to write to the file */
 	data?: string;
+
+	/** Optional per-event mode; falls back to the plugin setting when omitted */
+	mode?: WebhookWriteMode;
 
 	/** ISO 8601 timestamp when the event was created on the server */
 	created_at: string;
@@ -41,7 +52,7 @@ export interface WebhookSettings {
 	autoConnect: boolean;
 
 	/** Default write mode: append, overwrite, or merge YAML frontmatter */
-	defaultMode: "append" | "overwrite" | "frontmatter";
+	defaultMode: DefaultWriteMode;
 
 	/** Type of newline to add between incoming notes (none, windows, unix) */
 	newlineType: "none" | "windows" | "unix";
@@ -135,7 +146,7 @@ export interface PollingOptions {
  */
 export interface FileOperationOptions {
 	/** Write mode for the file */
-	mode: "append" | "overwrite" | "frontmatter";
+	mode: WebhookWriteMode;
 
 	/** Whether to create parent directories if they don't exist */
 	createDirs: boolean;

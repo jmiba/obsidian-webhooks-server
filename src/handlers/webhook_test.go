@@ -7,11 +7,55 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/khabaroff/obsidian-webhooks-selfhosted/src/database"
+	"github.com/khabaroff/obsidian-webhooks-selfhosted/src/models"
 	"github.com/khabaroff/obsidian-webhooks-selfhosted/src/services"
 )
+
+func TestNormalizeWriteMode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+		valid bool
+	}{
+		{input: "", want: "", valid: true},
+		{input: "create", want: "create", valid: true},
+		{input: " APPEND ", want: "append", valid: true},
+		{input: "overwrite", want: "overwrite", valid: true},
+		{input: "frontmatter", want: "frontmatter", valid: true},
+		{input: "delete", want: "", valid: false},
+	}
+
+	for _, tt := range tests {
+		got, valid := normalizeWriteMode(tt.input)
+		if got != tt.want || valid != tt.valid {
+			t.Errorf("normalizeWriteMode(%q) = (%q, %v), want (%q, %v)",
+				tt.input, got, valid, tt.want, tt.valid)
+		}
+	}
+}
+
+func TestFormatEventForSSEIncludesWriteMode(t *testing.T) {
+	event := &models.Event{
+		ID:        uuid.New(),
+		Path:      "notes/test.md",
+		Data:      []byte("status: done"),
+		WriteMode: "frontmatter",
+		CreatedAt: time.Now(),
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(formatEventForSSE(event)), &payload); err != nil {
+		t.Fatalf("failed to parse event JSON: %v", err)
+	}
+	if payload["mode"] != "frontmatter" {
+		t.Fatalf("expected frontmatter mode, got %v", payload["mode"])
+	}
+}
 
 func TestHandleWebhook_Success(t *testing.T) {
 	database.WithTestDB(t, func(tdb *database.TestDB) {
@@ -32,7 +76,7 @@ func TestHandleWebhook_Success(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest(http.MethodPost, "/webhook/"+webhookKey+"?path=/test/path", bytes.NewReader(reqBody))
+		c.Request = httptest.NewRequest(http.MethodPost, "/webhook/"+webhookKey+"?path=/test/path&mode=frontmatter", bytes.NewReader(reqBody))
 		c.Params = gin.Params{
 			{Key: "webhook_key", Value: webhookKey},
 		}
@@ -54,6 +98,21 @@ func TestHandleWebhook_Success(t *testing.T) {
 
 		if response["event_id"] == nil || response["event_id"] == "" {
 			t.Error("expected event_id to be set")
+		}
+		if response["mode"] != "frontmatter" {
+			t.Errorf("expected mode frontmatter, got %v", response["mode"])
+		}
+
+		eventID, err := uuid.Parse(response["event_id"].(string))
+		if err != nil {
+			t.Fatalf("failed to parse event ID: %v", err)
+		}
+		storedEvent, err := eventService.GetEventByID(c.Request.Context(), eventID)
+		if err != nil {
+			t.Fatalf("failed to load stored event: %v", err)
+		}
+		if storedEvent.WriteMode != "frontmatter" {
+			t.Errorf("expected stored mode frontmatter, got %q", storedEvent.WriteMode)
 		}
 	})
 }

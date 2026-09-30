@@ -119,10 +119,14 @@ CREATE TABLE IF NOT EXISTS events (
     webhook_key_id UUID NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
     path VARCHAR(512) NOT NULL,
     data BYTEA NOT NULL,
+    write_mode VARCHAR(20),
     processed BOOLEAN NOT NULL DEFAULT false,
     processed_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMP NOT NULL,
+    CONSTRAINT events_write_mode_check CHECK (
+        write_mode IS NULL OR write_mode IN ('create', 'append', 'overwrite', 'frontmatter')
+    ),
     CONSTRAINT processed_implies_timestamp CHECK (
         (processed = false AND processed_at IS NULL) OR
         (processed = true AND processed_at IS NOT NULL)
@@ -182,4 +186,3 @@ CREATE INDEX IF NOT EXISTS idx_webhook_logs_webhook_status ON webhook_logs(webho
 -- Composite indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_events_webhook_key_processed ON events(webhook_key_id, processed);
 CREATE INDEX IF NOT EXISTS idx_events_created_expires ON events(created_at, expires_at);
-

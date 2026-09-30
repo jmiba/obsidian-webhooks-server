@@ -24,9 +24,14 @@ type sseClient struct {
 func formatEventToJSON(event *models.Event) string {
 	dataStr := string(event.Data)
 	dataJSON, _ := json.Marshal(dataStr)
+	modeField := ""
+	if event.WriteMode != "" {
+		modeJSON, _ := json.Marshal(event.WriteMode)
+		modeField = fmt.Sprintf(`,"mode":%s`, string(modeJSON))
+	}
 
-	return fmt.Sprintf(`{"id":"%s","path":"%s","data":%s,"created_at":"%s"}`,
-		event.ID, event.Path, string(dataJSON), event.CreatedAt.Format(time.RFC3339))
+	return fmt.Sprintf(`{"id":"%s","path":"%s","data":%s%s,"created_at":"%s"}`,
+		event.ID, event.Path, string(dataJSON), modeField, event.CreatedAt.Format(time.RFC3339))
 }
 
 // SSEHandler handles Server-Sent Events connections
@@ -185,6 +190,9 @@ func (sh *SSEHandler) handlePolling(c *gin.Context, clientKey string) {
 			"path":       event.Path,
 			"data":       dataStr,
 			"created_at": event.CreatedAt.Format(time.RFC3339),
+		}
+		if event.WriteMode != "" {
+			formattedEvent["mode"] = event.WriteMode
 		}
 		formattedEvents = append(formattedEvents, formattedEvent)
 	}

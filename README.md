@@ -52,7 +52,7 @@ Check your vault — `inbox/test.md` should appear.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/webhook/{key}?path=file.md` | Send event (body: JSON or plain text) |
+| `POST` | `/webhook/{key}?path=file.md&mode=append` | Send event (body: JSON or plain text) |
 | `GET` | `/events/{client_key}` | SSE event stream |
 | `POST` | `/ack/{client_key}/{event_id}` | Acknowledge event |
 | `POST` | `/auth/register` | Register (sends magic link) |
@@ -62,31 +62,39 @@ Check your vault — `inbox/test.md` should appear.
 
 ### Webhook Body Format
 
-JSON fields are converted to Markdown with YAML frontmatter:
+Webhook bodies are not parsed or converted in `create`, `append`, and
+`overwrite` modes. JSON therefore remains JSON regardless of the target file
+extension. Append mode may insert the plugin's configured line separator. Max
+payload: 10 MB.
 
-```json
-{"title": "Meeting", "tags": ["work"], "source": "n8n", "content": "# Notes\n\n- Item 1"}
+YAML/JSON parsing occurs only in `frontmatter` mode, selected explicitly with
+`mode=frontmatter` or configured as the plugin's default write mode.
+
+### Per-Webhook Write Mode
+
+Add an optional `mode` query parameter to let each webhook choose its file
+operation:
+
+| Mode | Behavior |
+|------|----------|
+| `create` | Create a new note; fail safely if it already exists |
+| `append` | Append the request body to the note |
+| `overwrite` | Replace the complete note |
+| `frontmatter` | Merge YAML or JSON fields into the note's frontmatter |
+
+For example:
+
+```text
+POST /webhook/wh_xxx?path=projects/example.md&mode=frontmatter
 ```
 
-```markdown
----
-title: Meeting
-tags: ["work"]
-source: n8n
----
-
-# Notes
-
-- Item 1
-```
-
-Non-JSON body is written as-is. Max payload: 10 MB.
+When `mode` is omitted, the plugin uses its configured default write mode.
 
 ### Update YAML Frontmatter Only
 
-In the Obsidian plugin, open **Advanced > Write mode** and select
-**Update YAML frontmatter**. Each webhook body can then be either a complete
-frontmatter block:
+Use `mode=frontmatter` in the webhook URL, or select **Update YAML
+frontmatter** as the plugin's default under **Advanced > Write mode**. The
+webhook body can be either a complete frontmatter block:
 
 ```yaml
 ---

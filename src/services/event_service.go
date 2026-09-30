@@ -45,6 +45,11 @@ func (es *EventService) decryptEventData(event *models.Event) error {
 
 // CreateEvent creates a new webhook event
 func (es *EventService) CreateEvent(ctx context.Context, webhookKeyID uuid.UUID, path string, data []byte, ttl time.Duration) (*models.Event, error) {
+	return es.CreateEventWithMode(ctx, webhookKeyID, path, data, "", ttl)
+}
+
+// CreateEventWithMode creates a webhook event with an optional per-event write mode.
+func (es *EventService) CreateEventWithMode(ctx context.Context, webhookKeyID uuid.UUID, path string, data []byte, writeMode string, ttl time.Duration) (*models.Event, error) {
 	eventID := uuid.New()
 	now := time.Now()
 	expiresAt := now.Add(ttl)
@@ -60,6 +65,7 @@ func (es *EventService) CreateEvent(ctx context.Context, webhookKeyID uuid.UUID,
 		WebhookKeyID: webhookKeyID,
 		Path:         path,
 		Data:         data, // keep plaintext in returned event
+		WriteMode:    writeMode,
 		Processed:    false,
 		ProcessedAt:  nil,
 		CreatedAt:    now,
@@ -79,11 +85,11 @@ func (es *EventService) CreateEvent(ctx context.Context, webhookKeyID uuid.UUID,
 
 	// Fallback to direct pool access (for backward compatibility)
 	err = es.pool.QueryRow(ctx,
-		`INSERT INTO events (id, webhook_key_id, path, data, processed, created_at, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 RETURNING id, webhook_key_id, path, data, processed, processed_at, created_at, expires_at`,
-		eventID, webhookKeyID, path, storageData, false, now, expiresAt,
-	).Scan(&eventID, &webhookKeyID, &path, &storageData, nil, nil, &now, &expiresAt)
+		`INSERT INTO events (id, webhook_key_id, path, data, write_mode, processed, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8)
+		 RETURNING id, webhook_key_id, path, data, COALESCE(write_mode, ''), processed, processed_at, created_at, expires_at`,
+		eventID, webhookKeyID, path, storageData, writeMode, false, now, expiresAt,
+	).Scan(&eventID, &webhookKeyID, &path, &storageData, &writeMode, nil, nil, &now, &expiresAt)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create event: %w", err)
@@ -101,7 +107,7 @@ func (es *EventService) GetUnprocessedEvents(ctx context.Context, webhookKeyID u
 
 	// Fallback to direct pool access (for backward compatibility)
 	rows, err := es.pool.Query(ctx,
-		`SELECT id, webhook_key_id, path, data, processed, processed_at, created_at, expires_at
+		`SELECT id, webhook_key_id, path, data, COALESCE(write_mode, ''), processed, processed_at, created_at, expires_at
 		 FROM events
 		 WHERE webhook_key_id = $1 AND processed = false
 		 ORDER BY created_at ASC`,
@@ -116,7 +122,7 @@ func (es *EventService) GetUnprocessedEvents(ctx context.Context, webhookKeyID u
 	var events []models.Event
 	for rows.Next() {
 		var e models.Event
-		err := rows.Scan(&e.ID, &e.WebhookKeyID, &e.Path, &e.Data, &e.Processed, &e.ProcessedAt, &e.CreatedAt, &e.ExpiresAt)
+		err := rows.Scan(&e.ID, &e.WebhookKeyID, &e.Path, &e.Data, &e.WriteMode, &e.Processed, &e.ProcessedAt, &e.CreatedAt, &e.ExpiresAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan event: %w", err)
 		}
@@ -143,10 +149,10 @@ func (es *EventService) GetEventByID(ctx context.Context, eventID uuid.UUID) (*m
 	// Fallback to direct pool access (for backward compatibility)
 	var e models.Event
 	err := es.pool.QueryRow(ctx,
-		`SELECT id, webhook_key_id, path, data, processed, processed_at, created_at, expires_at
+		`SELECT id, webhook_key_id, path, data, COALESCE(write_mode, ''), processed, processed_at, created_at, expires_at
 		 FROM events WHERE id = $1`,
 		eventID,
-	).Scan(&e.ID, &e.WebhookKeyID, &e.Path, &e.Data, &e.Processed, &e.ProcessedAt, &e.CreatedAt, &e.ExpiresAt)
+	).Scan(&e.ID, &e.WebhookKeyID, &e.Path, &e.Data, &e.WriteMode, &e.Processed, &e.ProcessedAt, &e.CreatedAt, &e.ExpiresAt)
 
 	if err != nil {
 		return nil, fmt.Errorf("event not found: %w", err)
@@ -214,7 +220,7 @@ func (es *EventService) GetEventsByWebhookKey(ctx context.Context, webhookKeyID 
 
 	// Fallback to direct pool access (for backward compatibility)
 	rows, err := es.pool.Query(ctx,
-		`SELECT id, webhook_key_id, path, data, processed, processed_at, created_at, expires_at
+		`SELECT id, webhook_key_id, path, data, COALESCE(write_mode, ''), processed, processed_at, created_at, expires_at
 		 FROM events
 		 WHERE webhook_key_id = $1
 		 ORDER BY created_at DESC
@@ -230,7 +236,7 @@ func (es *EventService) GetEventsByWebhookKey(ctx context.Context, webhookKeyID 
 	var events []models.Event
 	for rows.Next() {
 		var e models.Event
-		err := rows.Scan(&e.ID, &e.WebhookKeyID, &e.Path, &e.Data, &e.Processed, &e.ProcessedAt, &e.CreatedAt, &e.ExpiresAt)
+		err := rows.Scan(&e.ID, &e.WebhookKeyID, &e.Path, &e.Data, &e.WriteMode, &e.Processed, &e.ProcessedAt, &e.CreatedAt, &e.ExpiresAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan event: %w", err)
 		}

@@ -102,7 +102,28 @@ func (db *Database) runMigrations(ctx context.Context) error {
 		return fmt.Errorf("failed to add event_ttl_days column: %w", err)
 	}
 
-	// Migration 2: Update ALL records to ensure key_type and is_active are set correctly
+	// Migration 2: Store an optional per-event write mode for plugin delivery.
+	_, err = db.pool.Exec(ctx, `
+		ALTER TABLE events
+		ADD COLUMN IF NOT EXISTS write_mode VARCHAR(20);
+
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'events_write_mode_check'
+			) THEN
+				ALTER TABLE events
+				ADD CONSTRAINT events_write_mode_check
+				CHECK (write_mode IS NULL OR write_mode IN ('create', 'append', 'overwrite', 'frontmatter'));
+			END IF;
+		END $$;
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to add events write_mode column: %w", err)
+	}
+
+	// Migration 3: Update ALL records to ensure key_type and is_active are set correctly
 	result, err := db.pool.Exec(ctx, `
 		UPDATE api_keys
 		SET

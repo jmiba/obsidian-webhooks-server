@@ -81,10 +81,14 @@ CREATE TABLE events (
     webhook_key_id UUID NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
     path VARCHAR(512) NOT NULL,
     data BYTEA NOT NULL,
+    write_mode VARCHAR(20),
     processed BOOLEAN NOT NULL DEFAULT false,
     processed_at TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMP NOT NULL
+    expires_at TIMESTAMP NOT NULL,
+    CONSTRAINT events_write_mode_check CHECK (
+        write_mode IS NULL OR write_mode IN ('create', 'append', 'overwrite', 'frontmatter')
+    )
 );
 
 -- webhook_logs table

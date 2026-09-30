@@ -168,34 +168,10 @@ Folders created automatically
 File written successfully ✅
 ```
 
-### JSON Formatting
+### Payload Formatting
 
-**Automatic detection and conversion:**
-
-```typescript
-// Input (JSON webhook data):
-{
-  "title": "My Note",
-  "content": "Note content here",
-  "tags": ["tag1", "tag2"]
-}
-
-// Output (Markdown with frontmatter):
----
-title: My Note
-tags: ["tag1", "tag2"]
----
-
-Note content here
-```
-
-**Supported fields:**
-- `title` → frontmatter
-- `content` → markdown body
-- `tags` → frontmatter array
-- `date`, `created`, `updated` → frontmatter
-- `author` → frontmatter
-- Any other fields → frontmatter as-is
+Webhook bodies remain raw in `create`, `append`, and `overwrite` modes. The
+plugin parses YAML or JSON only in `frontmatter` mode.
 
 ---
 
@@ -285,6 +261,9 @@ A: Yes. Expand "Advanced Settings" and select "Overwrite file" from the Write mo
 **Q: Can I update only YAML frontmatter?**
 A: Yes. Select "Update YAML frontmatter" from the Write mode dropdown. Send a complete frontmatter block, a YAML field mapping, or a JSON object. Matching fields are overwritten, missing fields are created, and the note body is preserved.
 
+**Q: Can each webhook choose its own write mode?**
+A: Yes. Add `mode=create`, `mode=append`, `mode=overwrite`, or `mode=frontmatter` to the webhook URL. This overrides the configured default for that event. Create mode fails if the note already exists.
+
 **Q: Why can't I disable auto-create folders?**
 A: Disabling it would cause "parent folder not found" errors. There's no benefit to manual folder creation - it's always safe to enable.
 
@@ -333,7 +312,7 @@ Server sends via SSE (if connected)
       ↓
       Check if already processed (duplicate detection)
       ↓
-      Format JSON → Markdown (if applicable)
+      Parse metadata only when mode is frontmatter
       ↓
       Auto-create parent folders
       ↓

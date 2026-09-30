@@ -334,7 +334,7 @@ export default class ObsidianWebhooksPlugin extends Plugin {
 			// Write to file using FileHandler
 			if (this.fileHandler) {
 				await this.fileHandler.processEvent(event, {
-					mode: this.settings.defaultMode,
+					mode: event.mode ?? this.settings.defaultMode,
 					createDirs: true,
 					separator: separator,
 				});

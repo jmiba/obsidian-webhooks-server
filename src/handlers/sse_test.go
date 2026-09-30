@@ -1,11 +1,31 @@
 package handlers
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/khabaroff/obsidian-webhooks-selfhosted/src/models"
 )
+
+func TestFormatEventToJSONIncludesWriteMode(t *testing.T) {
+	event := &models.Event{
+		ID:        uuid.New(),
+		Path:      "notes/test.md",
+		Data:      []byte("status: done"),
+		WriteMode: "frontmatter",
+		CreatedAt: time.Now(),
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(formatEventToJSON(event)), &payload); err != nil {
+		t.Fatalf("failed to parse event JSON: %v", err)
+	}
+	if payload["mode"] != "frontmatter" {
+		t.Fatalf("expected frontmatter mode, got %v", payload["mode"])
+	}
+}
 
 func TestBroadcastEvent_IsolatesByWebhookKeyID(t *testing.T) {
 	handler := NewSSEHandler(nil, nil, "")

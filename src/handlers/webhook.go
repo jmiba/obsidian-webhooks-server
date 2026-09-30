@@ -97,19 +97,43 @@ func formatEventForSSE(event *models.Event) string {
 	// Use json.Marshal to properly escape special characters
 	dataJSON, _ := json.Marshal(dataStr)
 
-	return fmt.Sprintf(`{"id":"%s","path":"%s","data":%s,"created_at":"%s"}`,
-		event.ID, event.Path, string(dataJSON), event.CreatedAt.Format(time.RFC3339))
+	modeField := ""
+	if event.WriteMode != "" {
+		modeJSON, _ := json.Marshal(event.WriteMode)
+		modeField = fmt.Sprintf(`,"mode":%s`, string(modeJSON))
+	}
+
+	return fmt.Sprintf(`{"id":"%s","path":"%s","data":%s%s,"created_at":"%s"}`,
+		event.ID, event.Path, string(dataJSON), modeField, event.CreatedAt.Format(time.RFC3339))
+}
+
+func normalizeWriteMode(value string) (string, bool) {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	switch mode {
+	case "", "create", "append", "overwrite", "frontmatter":
+		return mode, true
+	default:
+		return "", false
+	}
 }
 
 // HandleWebhook processes incoming webhook requests
 func (wh *WebhookHandler) HandleWebhook(c *gin.Context) {
 	webhookKey := c.Param("webhook_key")
 	path := c.Query("path")
+	writeMode, validMode := normalizeWriteMode(c.Query("mode"))
 
 	// Validate path parameter - required
 	if path == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "path query parameter is required",
+		})
+		return
+	}
+
+	if !validMode {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid mode (allowed: create, append, overwrite, frontmatter)",
 		})
 		return
 	}
@@ -157,11 +181,12 @@ func (wh *WebhookHandler) HandleWebhook(c *gin.Context) {
 	}
 
 	// Create event
-	event, err := wh.eventService.CreateEvent(
+	event, err := wh.eventService.CreateEventWithMode(
 		c.Request.Context(),
 		wk.ID,
 		path,
 		body,
+		writeMode,
 		24*365*time.Hour, // Default TTL
 	)
 	if err != nil {
@@ -202,8 +227,12 @@ func (wh *WebhookHandler) HandleWebhook(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"status":   "ok",
 		"event_id": event.ID,
-	})
+	}
+	if writeMode != "" {
+		response["mode"] = writeMode
+	}
+	c.JSON(http.StatusOK, response)
 }
