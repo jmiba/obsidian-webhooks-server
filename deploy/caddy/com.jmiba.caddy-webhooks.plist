@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>jmiba.caddy-webhooks</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/caddy</string>
+		<string>run</string>
+		<string>--config</string>
+		<string>/Users/jmiba/Github/obsidian-webhooks-server/deploy/caddy/Caddyfile</string>
+		<string>--adapter</string>
+		<string>caddyfile</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>/tmp/caddy-webhooks.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/caddy-webhooks.err.log</string>
+</dict>
+</plist>

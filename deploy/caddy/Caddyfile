@@ -1,0 +1,26 @@
+# Caddy reverse proxy: TLS termination (auto Let's Encrypt) for the
+# obsidian-webhooks-server running natively on this Mac (port 8070).
+#
+# Requirements:
+#   - Router forwards external 80 and 443 to this Mac
+#   - jmiba.ddnss.de resolves to your public IP (kept fresh by deploy/ddns)
+#
+# On first start Caddy fetches a certificate via HTTP-01 (port 80),
+# then renews it automatically.
+
+jmiba.ddnss.de {
+	# Hide internal details from clients
+	header {
+		-Server
+	}
+
+	# SSE (Server-Sent Events) needs buffering disabled upstream;
+	# Caddy passes through by default, but set explicit timeouts
+	# so long-lived SSE connections aren't cut.
+	reverse_proxy 127.0.0.1:8070 {
+		transport http {
+			dial_timeout 5s
+		}
+		flush_interval -1
+	}
+}
