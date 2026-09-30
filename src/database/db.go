@@ -140,6 +140,15 @@ func (db *Database) runMigrations(ctx context.Context) error {
 		log.Printf("Migration: Updated %d api_keys records", result.RowsAffected())
 	}
 
+	// Migration 4: Add preferred_language column used for per-user email language.
+	_, err = db.pool.Exec(ctx, `
+		ALTER TABLE api_keys
+		ADD COLUMN IF NOT EXISTS preferred_language VARCHAR(10) NOT NULL DEFAULT 'en';
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to add preferred_language column: %w", err)
+	}
+
 	log.Println("Migrations completed successfully")
 	return nil
 }

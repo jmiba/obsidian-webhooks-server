@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     user_email VARCHAR(255),
     user_name VARCHAR(255),
     email_verified BOOLEAN NOT NULL DEFAULT false,
+    preferred_language VARCHAR(10) NOT NULL DEFAULT 'en',
     magic_link_token VARCHAR(255),
     magic_link_expires_at TIMESTAMP,
     magic_link_used_at TIMESTAMP,
