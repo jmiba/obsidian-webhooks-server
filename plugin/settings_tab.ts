@@ -7,10 +7,99 @@
  * - Smart defaults that "just work"
  */
 
-import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type ObsidianWebhooksPlugin from "./main";
 import type { WebhookSettings } from "./types";
 import { getTunnelRequestHeaders } from "./utils/request-headers";
+import { PendingQueue } from "./handlers/pending_queue";
+import type { PendingEvent } from "./utils/clear-pending";
+
+class PendingQueueModal extends Modal {
+	private queue: PendingQueue;
+	private events: PendingEvent[] = [];
+	private busy = false;
+
+	constructor(app: App, serverUrl: string, clientKey: string) {
+		super(app);
+		this.queue = new PendingQueue(serverUrl, clientKey);
+	}
+
+	onOpen(): void {
+		void this.load();
+	}
+
+	private async load(): Promise<void> {
+		if (this.busy) return;
+		this.busy = true;
+		this.contentEl.empty();
+		this.contentEl.createEl("h2", { text: "Pending webhook events" });
+		this.contentEl.createEl("p", { text: "Loading pending events..." });
+		try {
+			this.events = await this.queue.list();
+			this.render();
+		} catch (error) {
+			this.contentEl.empty();
+			this.contentEl.createEl("h2", { text: "Pending webhook events" });
+			this.contentEl.createEl("p", {
+				text: error instanceof Error ? error.message : "Could not load pending events",
+			});
+			new Setting(this.contentEl).addButton((button) => button
+				.setButtonText("Retry")
+				.onClick(() => void this.load()));
+		} finally {
+			this.busy = false;
+		}
+	}
+
+	private render(message?: string): void {
+		this.contentEl.empty();
+		this.contentEl.createEl("h2", { text: "Pending webhook events" });
+		if (message) this.contentEl.createEl("p", { text: message });
+		this.contentEl.createEl("p", {
+			text: `${this.events.length} pending event${this.events.length === 1 ? "" : "s"}.`,
+		});
+		if (this.events.length > 0) {
+			const list = this.contentEl.createEl("ul");
+			for (const event of this.events.slice(0, 20)) {
+				list.createEl("li", { text: event.path });
+			}
+			if (this.events.length > 20) {
+				this.contentEl.createEl("p", { text: `Showing the first 20 of ${this.events.length} paths.` });
+			}
+			this.contentEl.createEl("p", {
+				text: "Clearing acknowledges these events without writing them to the vault. They will no longer be delivered. New events are unaffected.",
+			});
+		}
+		new Setting(this.contentEl)
+			.addButton((button) => button.setButtonText("Refresh").onClick(() => void this.load()))
+			.addButton((button) => {
+				button.setButtonText(`Clear ${this.events.length} pending`)
+					.setWarning()
+					.setDisabled(this.events.length === 0)
+					.onClick(() => void this.clear(button));
+			});
+	}
+
+	private async clear(button: { setDisabled(disabled: boolean): unknown; setButtonText(text: string): unknown }): Promise<void> {
+		if (this.busy || this.events.length === 0) return;
+		this.busy = true;
+		button.setDisabled(true);
+		button.setButtonText("Clearing...");
+		const count = this.events.length;
+		const result = await this.queue.clear(this.events);
+		this.events = this.events.slice(result.acknowledged);
+		try {
+			this.events = await this.queue.list();
+			this.render(result.failedId
+				? `Acknowledged ${result.acknowledged} of ${count}; stopped after a failed request. ${this.events.length} remain pending.`
+				: `Acknowledged ${result.acknowledged} event${result.acknowledged === 1 ? "" : "s"}. ${this.events.length} remain pending.`);
+		} catch (error) {
+			this.render(`Acknowledged ${result.acknowledged} of ${count}. Could not refresh the remaining queue: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			this.busy = false;
+		}
+	}
+}
 
 export class WebhookSettingTab extends PluginSettingTab {
 	plugin: ObsidianWebhooksPlugin;
@@ -35,6 +124,16 @@ export class WebhookSettingTab extends PluginSettingTab {
 
 		// Test Connection button
 		this.renderTestConnection(containerEl);
+
+		// Manual queue recovery
+		new Setting(containerEl)
+			.setName("Pending events")
+			.setDesc("Review and clear events that keep failing")
+			.addButton((button) => button
+				.setButtonText("Review queue")
+				.onClick(() => {
+					new PendingQueueModal(this.app, this.plugin.settings.serverUrl, this.plugin.settings.clientKey).open();
+				}));
 
 		// Advanced Settings (collapsed by default)
 		this.renderAdvancedSettings(containerEl);

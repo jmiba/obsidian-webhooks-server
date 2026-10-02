@@ -75,6 +75,15 @@ Per-request modes are `create`, `append`, `overwrite`, and `frontmatter`. If no
 mode is supplied, the plugin's configured default is used. `create` never
 overwrites an existing note.
 
+### Clear a stuck event queue
+
+Open the plugin settings and choose **Pending events > Review queue**. The
+dialog shows the pending count and target paths. Choose **Clear pending** to
+acknowledge the displayed events without writing their contents to the vault.
+The server retains their history, but will stop redelivering them. If an
+acknowledgment fails, the dialog shows how many succeeded and leaves the rest
+pending. Fix the sender's target path too, or new failing events will appear.
+
 ## Credits
 
 Based on the original [obsidian-webhooks](https://github.com/trashhalo/obsidian-webhooks) plugin by [@trashhalo](https://github.com/trashhalo).
